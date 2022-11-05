@@ -253,12 +253,12 @@ void MapExtractor::Process()
                         }
                     }
 
-                    std::string localChunkBlendMapPath = "Texture\\blendmaps\\" + mapInternalName + "\\" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".dds";
+                    std::string localChunkBlendMapPath = "blendmaps\\" + mapInternalName + "\\" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".dds";
                     chunk.chunkAlphaMapTextureHash = StringUtils::fnv1a_32(localChunkBlendMapPath.c_str(), localChunkBlendMapPath.length());
 
                     if (createChunkAlphaMaps)
                     {
-                        std::string chunkBlendMapOutputPath = (runtime->paths.data / localChunkBlendMapPath).string();
+                        std::string chunkBlendMapOutputPath = (runtime->paths.texture / localChunkBlendMapPath).string();
 
                         BLP::BlpConvert blpConvert;
                         blpConvert.ConvertRaw(64, 64, Terrain::CHUNK_NUM_CELLS, alphaMapBuffer->GetDataPointer(), Terrain::CHUNK_ALPHAMAP_TOTAL_BYTE_SIZE, BLP::InputFormat::BGRA_8UB, BLP::Format::BC1, chunkBlendMapOutputPath, false);

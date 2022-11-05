@@ -29,7 +29,6 @@ i32 main()
 			paths.data = paths.executable / "Data";
 			paths.clientDB = paths.data / "ClientDB";
 			paths.texture = paths.data / "Texture";
-			paths.textureBlendMap = paths.texture / "/blendmaps";
 			paths.map = paths.data / "Map";
 			paths.mapObject = paths.data / "MapObject";
 			paths.complexModel = paths.data / "ComplexModel";
@@ -37,7 +36,6 @@ i32 main()
 			fs::create_directory(paths.data);
 			fs::create_directory(paths.clientDB);
 			fs::create_directory(paths.texture);
-			fs::create_directory(paths.textureBlendMap);
 			fs::create_directory(paths.map);
 			fs::create_directory(paths.mapObject);
 			fs::create_directory(paths.complexModel);
