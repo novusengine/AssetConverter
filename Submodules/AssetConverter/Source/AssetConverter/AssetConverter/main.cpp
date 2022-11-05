@@ -29,7 +29,7 @@ i32 main()
 			paths.data = paths.executable / "Data";
 			paths.clientDB = paths.data / "ClientDB";
 			paths.texture = paths.data / "Texture";
-			paths.textureBlendMap = paths.data / "Texture/blendmaps";
+			paths.textureBlendMap = paths.texture / "/blendmaps";
 			paths.map = paths.data / "Map";
 			paths.mapObject = paths.data / "MapObject";
 			paths.complexModel = paths.data / "ComplexModel";
