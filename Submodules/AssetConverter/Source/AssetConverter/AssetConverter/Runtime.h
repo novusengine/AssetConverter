@@ -13,6 +13,7 @@ public:
 		fs::path data;
 		fs::path clientDB;
 		fs::path texture;
+		fs::path textureBlendMap;
 		fs::path map;
 		fs::path mapObject;
 		fs::path complexModel;
