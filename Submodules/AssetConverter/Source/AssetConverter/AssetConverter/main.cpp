@@ -34,13 +34,13 @@ i32 main()
 			paths.mapObject = paths.data / "MapObject";
 			paths.complexModel = paths.data / "ComplexModel";
 
-			fs::create_directory(paths.data);
-			fs::create_directory(paths.clientDB);
-			fs::create_directory(paths.texture);
-			fs::create_directory(paths.textureBlendMap);
-			fs::create_directory(paths.map);
-			fs::create_directory(paths.mapObject);
-			fs::create_directory(paths.complexModel);
+			fs::create_directories(paths.data);
+			fs::create_directories(paths.clientDB);
+			fs::create_directories(paths.texture);
+			fs::create_directories(paths.textureBlendMap);
+			fs::create_directories(paths.map);
+			fs::create_directories(paths.mapObject);
+			fs::create_directories(paths.complexModel);
 		}
 
 		// Setup Json

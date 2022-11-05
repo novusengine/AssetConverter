@@ -59,8 +59,8 @@ void MapExtractor::Process()
             continue;
         }
 
-        std::filesystem::create_directory(runtime->paths.map / mapInternalName);
-        std::filesystem::create_directory(runtime->paths.textureBlendMap / mapInternalName);
+        std::filesystem::create_directories(runtime->paths.map / mapInternalName);
+        std::filesystem::create_directories(runtime->paths.textureBlendMap / mapInternalName);
 
         Map::Layout layout = { };
         layout.flags.UseMapObjectAsBase = wdt.mphd.flags.UseGlobalMapObj;
