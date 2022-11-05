@@ -122,6 +122,84 @@ namespace BLP
 		texture.save(outputPath.c_str(), cuttlefish::Texture::FileType::DDS);
 	}
 
+	cuttlefish::Image::Format GetInputFormat(const InputFormat& inputFormat)
+	{
+		switch (inputFormat)
+		{
+			case InputFormat::BGRA_8UB: return cuttlefish::Image::Format::RGBA8;
+			case InputFormat::RGBA_32F: return cuttlefish::Image::Format::RGBAF;
+			case InputFormat::R_32F:    return cuttlefish::Image::Format::Float;
+			default: assert(false);
+		};
+
+		return cuttlefish::Image::Format::RGBA8;
+	}
+
+	cuttlefish::Texture::Format GetOutputFormat(Format format)
+	{
+		switch (format)
+		{
+			case Format::RGB:  return cuttlefish::Texture::Format::R8G8B8;
+			case Format::RGBA: return cuttlefish::Texture::Format::R8G8B8A8;
+			case Format::BC1:  return cuttlefish::Texture::Format::BC1_RGB;
+			case Format::BC2:  return cuttlefish::Texture::Format::BC2;
+			case Format::BC3:  return cuttlefish::Texture::Format::BC3;
+			default: assert(false);
+		}
+		return cuttlefish::Texture::Format::R8G8B8;
+	}
+
+	void BlpConvert::ConvertRaw(uint32_t width, uint32_t height, uint32_t layers, unsigned char* inputBytes, std::size_t size, InputFormat inputFormat, Format outputFormat, const std::string& outputPath, bool generateMipmaps)
+	{
+		cuttlefish::Image::Format cuttleFishInputFormat = GetInputFormat(inputFormat);
+		cuttlefish::Texture::Format cuttleFishOutputFormat = GetOutputFormat(outputFormat);
+
+		cuttlefish::Texture::Dimension dimension = cuttlefish::Texture::Dimension::Dim2D;
+		if (layers != 1)
+		{
+			dimension = cuttlefish::Texture::Dimension::Dim3D;
+		}
+
+		cuttlefish::Image image;
+		if (!image.initialize(cuttleFishInputFormat, width, height))
+			return;
+
+		cuttlefish::Texture texture(dimension, width, height, layers);
+
+		for (int layer = 0; layer < layers; layer++)
+		{
+			for (int y = 0; y < height; y++)
+			{
+				for (int x = 0; x < width; x++)
+				{
+					int pixelID = (x + (y * width)) + (layer * (height * width));
+					uint32_t pixelColor = reinterpret_cast<uint32_t*>(inputBytes)[pixelID];
+
+					cuttlefish::ColorRGBAd color;
+					color.r = ((pixelColor >> 16) & 0xFF) / 255.0f;
+					color.g = ((pixelColor >> 8) & 0xFF) / 255.0f;
+					color.b = (pixelColor & 0xFF) / 255.0f;
+					color.a = ((pixelColor >> 24) & 0xFF) / 255.0f;
+
+					image.setPixel(x, y, color);
+				}
+			}
+
+			if (!texture.setImage(image, 0, layer))
+				return;
+		}
+
+		if (generateMipmaps)
+		{
+			texture.generateMipmaps();
+		}
+
+		if (!texture.convert(cuttleFishOutputFormat, cuttlefish::Texture::Type::UNorm))
+			return;
+
+		texture.save(outputPath.c_str(), cuttlefish::Texture::FileType::DDS);
+	}
+
 	void BlpConvert::LoadFirstLayer(const BlpHeader& header, ByteStream& data, std::vector<uint32_t>& imageData) const
 	{
 		Format format = GetFormat(header);

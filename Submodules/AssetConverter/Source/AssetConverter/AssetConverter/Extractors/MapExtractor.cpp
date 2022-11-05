@@ -1,5 +1,6 @@
 #include "MapExtractor.h"
 #include "AssetConverter/Runtime.h"
+#include "AssetConverter/Blp/BlpConvert.h"
 #include "AssetConverter/Casc/CascLoader.h"
 #include "AssetConverter/Extractors/ClientDBExtractor.h"
 #include "AssetConverter/Util/ServiceLocator.h"
@@ -59,6 +60,7 @@ void MapExtractor::Process()
         }
 
         std::filesystem::create_directory(runtime->paths.map / mapInternalName);
+        std::filesystem::create_directory(runtime->paths.textureBlendMap / mapInternalName);
 
         Map::Layout layout = { };
         layout.flags.UseMapObjectAsBase = wdt.mphd.flags.UseGlobalMapObj;
@@ -249,11 +251,21 @@ void MapExtractor::Process()
                                 }
                             }
                         }
-
-                        std::string localChunkPath = mapInternalName + "\\" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".chunk";
-                        std::string chunkOutputPath = (runtime->paths.map / localChunkPath).string();
-                        chunk.Save(chunkOutputPath);
                     }
+
+                    std::string localChunkBlendMapPath = mapInternalName + "\\" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".dds";
+                    std::string chunkBlendMapOutputPath = (runtime->paths.textureBlendMap / localChunkBlendMapPath).string();
+                    chunk.chunkAlphaMapTextureHash = StringUtils::fnv1a_32(chunkBlendMapOutputPath.c_str(), chunkBlendMapOutputPath.length());
+
+                    if (createChunkAlphaMaps)
+                    {
+                        BLP::BlpConvert blpConvert;
+                        blpConvert.ConvertRaw(64, 64, Terrain::CHUNK_NUM_CELLS, alphaMapBuffer->GetDataPointer(), Terrain::CHUNK_ALPHAMAP_TOTAL_BYTE_SIZE, BLP::InputFormat::BGRA_8UB, BLP::Format::BC1, chunkBlendMapOutputPath, false);
+                    }
+
+                    std::string localChunkPath = mapInternalName + "\\" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".chunk";
+                    std::string chunkOutputPath = (runtime->paths.map / localChunkPath).string();
+                    chunk.Save(chunkOutputPath);
                 }
             }
 
