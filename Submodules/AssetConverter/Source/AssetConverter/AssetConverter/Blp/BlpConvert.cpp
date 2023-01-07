@@ -116,6 +116,11 @@ namespace BLP
 		if (!texture.setImage(image))
 			return;
 
+		if (generateMipmaps)
+		{
+			texture.generateMipmaps();
+		}
+
 		if (!texture.convert(textureFormat, cuttlefish::Texture::Type::UNorm))
 			return;
 
