@@ -280,11 +280,11 @@ void MapExtractor::Process()
 
             if (fileWriter.Write())
             {
-                DebugHandler::PrintSuccess("[Map Extractor] Extracted %s", mapInternalName.c_str());
+                DebugHandler::Print("[Map Extractor] Extracted {0}", mapInternalName);
             }
             else
             {
-                DebugHandler::PrintWarning("[Map Extractor] Failed to extract %s", mapInternalName.c_str());
+                DebugHandler::PrintWarning("[Map Extractor] Failed to extract {0}", mapInternalName);
             }
         }
     }

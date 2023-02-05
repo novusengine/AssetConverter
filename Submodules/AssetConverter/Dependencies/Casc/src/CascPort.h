@@ -93,7 +93,7 @@
   #include <netdb.h>
 
   // Support for PowerPC on Max OS X
-  #if (__ppc__ == 1) || (__POWERPC__ == 1) || (_ARCH_PPC == 1)
+  #if(__ppc__ == 1) || (__POWERPC__ == 1) || (_ARCH_PPC == 1)
     #include <stdint.h>
     #include <CoreFoundation/CFByteOrder.h>
   #endif
@@ -272,6 +272,10 @@
 
 #ifndef ERROR_INDEX_PARSING_DONE
 #define ERROR_INDEX_PARSING_DONE         1010
+#endif
+
+#ifndef ERROR_REPARSE_ROOT
+#define ERROR_REPARSE_ROOT               1011
 #endif
 
 #ifndef _countof

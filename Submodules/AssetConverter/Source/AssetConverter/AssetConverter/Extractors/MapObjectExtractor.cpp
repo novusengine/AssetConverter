@@ -165,11 +165,11 @@ void MapObjectExtractor::Process()
 		{
 			if (result)
 			{
-				DebugHandler::PrintSuccess("[MapObject Extractor] Extracted %s", fileListEntry.fileName.c_str());
+				DebugHandler::Print("[MapObject Extractor] Extracted {0}", fileListEntry.fileName);
 			}
 			else
 			{
-				DebugHandler::PrintWarning("[MapObject Extractor] Failed to extract %s", fileListEntry.fileName.c_str());
+				DebugHandler::PrintWarning("[MapObject Extractor] Failed to extract {0}", fileListEntry.fileName);
 			}
 		}
 
@@ -181,7 +181,7 @@ void MapObjectExtractor::Process()
 		if (reportStatus)
 		{
 			progressFlags |= bitMask;
-			DebugHandler::PrintSuccess("[MapObject Extractor] Progress Status (%.2f%% / 100%%)", progress * 10.0f);
+			DebugHandler::Print("[MapObject Extractor] Progress Status (%.2f%% / 100%%)", progress * 10.0f);
 		}
 	}
 }

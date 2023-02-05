@@ -28,7 +28,7 @@ CascLoader::Result CascLoader::Load()
     if (!CascOpenStorageEx(nullptr, &args, false, &_storageHandle))
         return Result::MissingCasc;
 
-    DebugHandler::PrintSuccess("[CascLoader] : Loading ListFile");
+    DebugHandler::Print("[CascLoader] : Loading ListFile");
     if (!_listFile.Initialize())
         return Result::MissingListFile;
 
@@ -102,7 +102,7 @@ bool CascLoader::LoadingCallback(void* ptrUserParam, LPCSTR szWork, LPCSTR szObj
         _isLoadingIndexFiles = true;
     }
 
-    DebugHandler::PrintSuccess("[CascLoader] : %s", szWork);
+    DebugHandler::Print("[CascLoader] : {0}", szWork);
     return false;
 }
 

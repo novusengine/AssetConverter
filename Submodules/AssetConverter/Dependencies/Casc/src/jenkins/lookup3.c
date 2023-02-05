@@ -69,6 +69,12 @@ on 1 byte), but shoehorning those bytes into integers efficiently is messy.
 #define hashmask(n) (hashsize(n)-1)
 #define rot(x,k) (((x)<<(k)) | ((x)>>(32-(k))))
 
+/* Fixup some warnings in MS Visual C++ */
+#ifdef _MSC_VER
+#pragma warning(disable: 4127)              // warning C4127: conditional expression is constant
+#pragma warning(disable: 4101)              // warning C4101: 'k8': unreferenced local variable
+#endif
+
 /*
 -------------------------------------------------------------------------------
 mix -- mix 3 32-bit values reversibly.
@@ -292,7 +298,7 @@ uint32_t hashlittle( const void *key, size_t length, uint32_t initval)
   u.ptr = key;
   if (HASH_LITTLE_ENDIAN && ((u.i & 0x3) == 0)) {
     const uint32_t *k = (const uint32_t *)key;         /* read 32-bit chunks */
-    //const uint8_t  *k8;
+    const uint8_t  *k8;
 
     /*------ all but last block: aligned reads and affect 32 bits of (a,b,c) */
     while (length > 12)
@@ -477,7 +483,7 @@ void hashlittle2(
   u.ptr = key;
   if (HASH_LITTLE_ENDIAN && ((u.i & 0x3) == 0)) {
     const uint32_t *k = (const uint32_t *)key;         /* read 32-bit chunks */
-    //const uint8_t  *k8;
+    const uint8_t  *k8;
 
     /*------ all but last block: aligned reads and affect 32 bits of (a,b,c) */
     while (length > 12)
@@ -654,7 +660,7 @@ uint32_t hashbig( const void *key, size_t length, uint32_t initval)
   u.ptr = key;
   if (HASH_BIG_ENDIAN && ((u.i & 0x3) == 0)) {
     const uint32_t *k = (const uint32_t *)key;         /* read 32-bit chunks */
-    //const uint8_t  *k8;
+    const uint8_t  *k8;
 
     /*------ all but last block: aligned reads and affect 32 bits of (a,b,c) */
     while (length > 12)

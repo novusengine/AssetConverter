@@ -212,7 +212,7 @@ i32 main()
 	}
 
 	DebugHandler::Print("");
-	DebugHandler::PrintSuccess("Finished... Press 'Enter' to exit");
+	DebugHandler::Print("Finished... Press 'Enter' to exit");
 	std::cin.get();
 
 	return 0;

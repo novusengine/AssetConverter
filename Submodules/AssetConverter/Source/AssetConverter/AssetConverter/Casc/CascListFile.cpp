@@ -12,9 +12,8 @@ bool CascListFile::Initialize()
 		return false;
 
 	const std::string pathAsString = listFilePath.string();
-	const std::string fileNameAsString = listFilePath.filename().string();
 
-	FileReader reader(pathAsString, fileNameAsString);
+	FileReader reader(pathAsString);
 	if (!reader.Open())
 		return false;
 

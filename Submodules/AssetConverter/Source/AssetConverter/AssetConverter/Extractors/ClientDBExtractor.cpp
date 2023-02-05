@@ -32,11 +32,11 @@ void ClientDBExtractor::Process()
 
 		if (entry.function())
 		{
-			DebugHandler::PrintSuccess("[ClientDBExtractor] Extracted (\"%s\" : \"%s\")", entry.name.c_str(), entry.description.c_str());
+			DebugHandler::Print("[ClientDBExtractor] Extracted (\"{0}\" : \"{1}\")", entry.name, entry.description);
 		}
 		else
 		{
-			DebugHandler::PrintWarning("[ClientDBExtractor] Failed to extract (\"%s\" : \"%s\")", entry.name.c_str(), entry.description.c_str());
+			DebugHandler::PrintWarning("[ClientDBExtractor] Failed to extract (\"{0}\" : \"{1}\")", entry.name, entry.description);
 		}
 	}
 }

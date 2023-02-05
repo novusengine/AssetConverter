@@ -21,4 +21,7 @@ include(CMake/VSFilterUtils.cmake)
 # add_subdirectory(Submodules/Engine)
 
 add_subdirectory(Dependencies)
+
+include(CMake/TreatWarningsAsError.cmake)
+
 add_subdirectory(Source)

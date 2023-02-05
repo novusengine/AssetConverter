@@ -316,10 +316,7 @@ class CASC_MAP
         // Compare the whole part, case insensitive
         while(szString < szStringEnd)
         {
-            int existingIndex = static_cast<int>(*szExistingString);
-            int newIndex = static_cast<int>(*szString);
-
-            if(AsciiToUpperTable_BkSlash[existingIndex] != AsciiToUpperTable_BkSlash[newIndex])
+            if(AsciiToUpperTable_BkSlash[*szExistingString] != AsciiToUpperTable_BkSlash[*szString])
                 return false;
 
             szExistingString++;

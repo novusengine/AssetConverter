@@ -6,19 +6,205 @@
 /*---------------------------------------------------------------------------*/
 /*   Date    Ver   Who  Comment                                              */
 /* --------  ----  ---  -------                                              */
-/* 26.11.13  1.00  Lad  The first version of TLogHelper.cpp                  */
+/* 26.11.13  1.00  Lad  Created                                              */
 /*****************************************************************************/
 
 //-----------------------------------------------------------------------------
 // String replacements for format strings
 
-#ifdef _MSC_VER
-#define fmt_I64u "%I64u"
-#define fmt_I64X "%I64X"
-#else
-#define fmt_I64u "%llu"
-#define fmt_I64X "%llX"
+#if defined(STORMLIB_WINDOWS) || defined(CASCLIB_PLATFORM_WINDOWS)
+#define TEST_PLATFORM_WINDOWS
 #endif
+
+#ifdef _MSC_VER
+#define fmt_I64u_t _T("%I64u")
+#define fmt_I64u_a "%I64u"
+#define fmt_I64X_t _T("%I64X")
+#define fmt_I64X_a "%I64X"
+#else
+#define fmt_I64u_t _T("%llu")
+#define fmt_I64u_a "%llu"
+#define fmt_I64X_t _T("%llX")
+#define fmt_I64X_a "%llX"
+#endif
+
+#ifdef __CASCLIB_SELF__
+#define TEST_MIN CASCLIB_MIN
+#define TEST_PRINT_PREFIX   false
+#else
+#define TEST_MIN STORMLIB_MIN
+#define TEST_PRINT_PREFIX   true
+#endif
+
+//-----------------------------------------------------------------------------
+// Local functions
+
+inline DWORD TestInterlockedIncrement(DWORD * PtrValue)
+{
+#ifdef TEST_PLATFORM_WINDOWS
+    return (DWORD)InterlockedIncrement((LONG *)(PtrValue));
+#elif defined(__GNUC__)
+    return __sync_add_and_fetch(PtrValue, 1);
+#else
+    return ++(*PtrValue);
+#endif
+}
+
+inline DWORD Test_GetLastError()
+{
+#if defined(CASCLIB_PLATFORM_WINDOWS)
+    return GetCascError();
+#else
+    return GetLastError();
+#endif
+}
+
+void TestStrCopy(char * szTarget, size_t cchTarget, const char * szSource, size_t cchSource = -1)
+{
+    size_t cchToCopy;
+
+    if(cchTarget > 0)
+    {
+        // Make sure we know the length
+        if(cchSource == -1)
+            cchSource = strlen(szSource);
+        cchToCopy = TEST_MIN((cchTarget - 1), cchSource);
+
+        // Copy the string
+        memcpy(szTarget, szSource, cchToCopy);
+        szTarget[cchToCopy] = 0;
+    }
+}
+
+void TestStrCopy(char * szTarget, size_t cchTarget, const wchar_t * szSource, size_t cchSource = -1)
+{
+    size_t cchToCopy;
+
+    if(cchTarget > 0)
+    {
+        // Make sure we know the length
+        if(cchSource == -1)
+            cchSource = wcslen(szSource);
+        cchToCopy = TEST_MIN((cchTarget - 1), cchSource);
+
+        wcstombs(szTarget, szSource, cchToCopy);
+        szTarget[cchToCopy] = 0;
+    }
+}
+
+void TestStrCopy(wchar_t * szTarget, size_t cchTarget, const char * szSource, size_t cchSource = -1)
+{
+    size_t cchToCopy;
+
+    if(cchTarget > 0)
+    {
+        // Make sure we know the length
+        if(cchSource == -1)
+            cchSource = strlen(szSource);
+        cchToCopy = TEST_MIN((cchTarget - 1), cchSource);
+
+        mbstowcs(szTarget, szSource, cchToCopy);
+        szTarget[cchToCopy] = 0;
+    }
+}
+
+wchar_t * CopyFormatCharacter(wchar_t * szBuffer, const wchar_t *& szFormat)
+{
+    static const wchar_t * szStringFormat = _T("%s");
+    static const wchar_t * szUint64Format = fmt_I64u_t;
+
+    // String format
+    if(szFormat[0] == '%')
+    {
+        if(szFormat[1] == 's')
+        {
+            _tcscpy(szBuffer, szStringFormat);
+            szFormat += 2;
+            return szBuffer + _tcslen(szStringFormat);
+        }
+
+        // Replace %I64u with the proper platform-dependent suffix
+        if(szFormat[1] == 'I' && szFormat[2] == '6' && szFormat[3] == '4' && szFormat[4] == 'u')
+        {
+            _tcscpy(szBuffer, szUint64Format);
+            szFormat += 5;
+            return szBuffer + _tcslen(szUint64Format);
+        }
+    }
+
+    // Copy the character as-is
+    *szBuffer++ = *szFormat++;
+    return szBuffer;
+}
+
+char * CopyFormatCharacter(char * szBuffer, const char *& szFormat)
+{
+    static const char * szStringFormat = "\"%s\"";
+    static const char * szUint64Format = fmt_I64u_a;
+
+    // String format
+    if(szFormat[0] == '%')
+    {
+        if(szFormat[1] == 's')
+        {
+            TestStrCopy(szBuffer, 32, szStringFormat);
+            szFormat += 2;
+            return szBuffer + strlen(szStringFormat);
+        }
+
+        // Replace %I64u with the proper platform-dependent suffix
+        if(szFormat[1] == 'I' && szFormat[2] == '6' && szFormat[3] == '4' && szFormat[4] == 'u')
+        {
+            TestStrCopy(szBuffer, 32, szUint64Format);
+            szFormat += 5;
+            return szBuffer + strlen(szUint64Format);
+        }
+    }
+
+    // Copy the character as-is
+    *szBuffer++ = *szFormat++;
+    return szBuffer;
+}
+
+size_t TestStrPrintfV(char * buffer, size_t nCount, const char * format, va_list argList)
+{
+    return vsnprintf(buffer, nCount, format, argList);
+}
+
+size_t TestStrPrintf(char * buffer, size_t nCount, const char * format, ...)
+{
+    va_list argList;
+    size_t length;
+
+    // Start the argument list
+    va_start(argList, format);
+    length = TestStrPrintfV(buffer, nCount, format, argList);
+    va_end(argList);
+
+    return length;
+}
+
+size_t TestStrPrintfV(wchar_t * buffer, size_t nCount, const wchar_t * format, va_list argList)
+{
+#ifdef TEST_PLATFORM_WINDOWS
+    return _vsnwprintf(buffer, nCount, format, argList);
+#else
+    return vswprintf(buffer, nCount, format, argList);
+#endif
+}
+
+size_t TestStrPrintf(wchar_t * buffer, size_t nCount, const wchar_t * format, ...)
+{
+    va_list argList;
+    size_t length;
+
+    // Start the argument list
+    va_start(argList, format);
+    length = TestStrPrintfV(buffer, nCount, format, argList);
+    va_end(argList);
+
+    return length;
+}
 
 //-----------------------------------------------------------------------------
 // Definition of the TLogHelper class
@@ -31,66 +217,97 @@ class TLogHelper
     //  Constructor and destructor
     //
 
-    TLogHelper(const char * szNewMainTitle = NULL, const char * /* szNewSubTitle */ = NULL)
+    TLogHelper(const char * szNewMainTitle = NULL, const TCHAR * szNewSubTitle1 = NULL, const TCHAR * szNewSubTitle2 = NULL)
     {
         // Fill the variables
         memset(this, 0, sizeof(TLogHelper));
+        UserString = "";
+        TotalFiles = 1;
+        UserCount = 1;
+        UserTotal = 1;
 
-#ifdef CASCLIB_PLATFORM_WINDOWS
+#ifdef TEST_PLATFORM_WINDOWS
         InitializeCriticalSection(&Locker);
+        TickCount = GetTickCount();
 #endif
 
         // Remember the startup time
         SetStartTime();
-        TotalFiles = 1;
+
+        // Save all three titles
+        szMainTitle = szNewMainTitle;
+        szSubTitle1 = szNewSubTitle1;
+        szSubTitle2 = szNewSubTitle2;
 
         // Print the initial information
         if(szNewMainTitle != NULL)
         {
-            char szTitle[101];
+#ifdef __CASCLIB_SELF__
+            char szMainTitleT[0x100] = {0};
             size_t nLength;
 
-            nLength = CascStrPrintf(szTitle, _countof(szTitle), "-- \"%s\" --", szNewMainTitle);
+            nLength = TestStrPrintf(szMainTitleT, _countof(szMainTitleT), "-- \"%s\" --", szNewMainTitle);
             while(nLength < 90)
-                szTitle[nLength++] = '-';
-            if(nLength < sizeof(szTitle))
-                szTitle[nLength++] = 0;
+                szMainTitleT[nLength++] = '-';
+            if(nLength < sizeof(szMainTitleT))
+                szMainTitleT[nLength++] = 0;
 
-            printf("%s\n", szTitle);
+            printf("%s\n", szMainTitleT);
+#endif
+
+#ifdef __STORMLIB_SELF__
+            TCHAR szMainTitleT[0x100] = {0};
+
+            // Copy the UNICODE main title
+            TestStrCopy(szMainTitleT, _countof(szMainTitleT), szMainTitle);
+
+            if(szSubTitle1 != NULL && szSubTitle2 != NULL)
+                nPrevPrinted = _tprintf(_T("\rRunning %s (%s+%s) ..."), szMainTitleT, szSubTitle1, szSubTitle2);
+            else if(szSubTitle1 != NULL)
+                nPrevPrinted = _tprintf(_T("\rRunning %s (%s) ..."), szMainTitleT, szSubTitle1);
+            else
+                nPrevPrinted = _tprintf(_T("\rRunning %s ..."), szMainTitleT);
+#endif
         }
     }
 
     ~TLogHelper()
     {
-        const char * szSaveMainTitle = szMainTitle;
-        const char * szSaveSubTitle = szSubTitle;
-
-        // Set both to NULL so the won't be printed
-        szMainTitle = NULL;
-        szSubTitle = NULL;
-
-        // Print the final information
-        if(szSaveMainTitle != NULL && bMessagePrinted == false)
+        // Print a verdict, if no verdict was printed yet
+        if(bMessagePrinted == false)
         {
-            if(DontPrintResult == false)
-            {
-                if(szSaveSubTitle != NULL)
-                    PrintMessage("%s (%s) succeeded.", szSaveMainTitle, szSaveSubTitle);
-                else
-                    PrintMessage("%s succeeded.", szSaveMainTitle);
-            }
-            else
-            {
-                PrintProgress(" ");
-                printf("\r");
-            }
+            PrintVerdict(ERROR_SUCCESS);
         }
 
-#ifdef CASCLIB_PLATFORM_WINDOWS
+#ifdef TEST_PLATFORM_WINDOWS
         DeleteCriticalSection(&Locker);
 #endif
 
+#ifdef __CASCLIB_SELF__
         printf("\n");
+#endif
+    }
+
+    //
+    // Measurement of elapsed time
+    //
+
+    bool TimeElapsed(DWORD Milliseconds)
+    {
+        bool bTimeElapsed = false;
+
+#ifdef TEST_PLATFORM_WINDOWS
+        if(GetTickCount() > (TickCount + Milliseconds))
+        {
+            TickCount = GetTickCount();
+            if(TestInterlockedIncrement(&TimeTrigger) == 1)
+            {
+                bTimeElapsed = true;
+            }
+        }
+
+#endif
+        return bTimeElapsed;
     }
 
     //
@@ -98,19 +315,20 @@ class TLogHelper
     //
 
     template <typename XCHAR>
-    DWORD PrintWithClreol(const XCHAR * szFormat, va_list argList, bool bPrintPrefix, bool bPrintLastError, bool bPrintEndOfLine)
+    DWORD PrintWithClreol(const XCHAR * szFormat, va_list argList, bool bPrintLastError, bool bPrintEndOfLine)
     {
         char * szBufferPtr;
         char * szBufferEnd;
-        char szMessage[0x200];
-        size_t nRemainingWidth;
-        size_t nConsoleWidth = GetConsoleWidth();
+        size_t nNewPrinted;
         size_t nLength = 0;
-        DWORD dwErrCode = GetCascError();
+        DWORD dwErrCode = Test_GetLastError();
+        XCHAR szMessage[0x200];
+        char szBuffer[0x200];
+        bool bPrintPrefix = TEST_PRINT_PREFIX;
 
         // Always start the buffer with '\r'
-        szBufferEnd = szMessage + sizeof(szMessage);
-        szBufferPtr = szMessage;
+        szBufferEnd = szBuffer + _countof(szBuffer);
+        szBufferPtr = szBuffer;
         *szBufferPtr++ = '\r';
 
         // Print the prefix, if needed
@@ -118,104 +336,56 @@ class TLogHelper
         {
             while(szMainTitle[nLength] != 0)
                 *szBufferPtr++ = szMainTitle[nLength++];
-            
+
             *szBufferPtr++ = ':';
             *szBufferPtr++ = ' ';
         }
 
         // Construct the message
-        while(szFormat[0] != 0)
-        {
-            // Sanity check
-            assert(szBufferPtr < szBufferEnd);
-
-            // Is there a format character?
-            if(szFormat[0] == '%')
-            {
-                if(szFormat[1] == '%')
-                {
-                    *szBufferPtr++ = '%';
-                    szFormat += 2;
-                    continue;
-                }
-
-                // String argument
-                if(IsFormatSpecifier(szFormat, "%s"))
-                {
-                    const XCHAR * szArg = va_arg(argList, XCHAR *);
-                    szBufferPtr = StringCopy(szBufferPtr, szArg);
-                    szFormat += 2;
-                    continue;
-                }
-
-                // 64-bit integer argument
-                if(IsFormatSpecifier(szFormat, "%llu"))
-                {
-                    szBufferPtr += CascStrPrintf(szBufferPtr, (szBufferEnd - szBufferPtr), fmt_I64u, va_arg(argList, ULONGLONG));
-                    szFormat += 4;
-                    continue;
-                }
-
-                // 64-bit integer argument (hexa)
-                if(IsFormatSpecifier(szFormat, "%llX"))
-                {
-                    szBufferPtr += CascStrPrintf(szBufferPtr, (szBufferEnd - szBufferPtr), fmt_I64X, va_arg(argList, ULONGLONG));
-                    szFormat += 4;
-                    continue;
-                }
-
-                // 32-bit integer argument
-                if(IsFormatSpecifier(szFormat, "%u"))
-                {
-                    szBufferPtr += CascStrPrintf(szBufferPtr, (szBufferEnd - szBufferPtr), "%u", va_arg(argList, DWORD));
-                    szFormat += 2;
-                    continue;
-                }
-
-                // 32-bit integer argument
-                if (IsFormatSpecifier(szFormat, "%08X"))
-                {
-                    szBufferPtr += CascStrPrintf(szBufferPtr, (szBufferEnd - szBufferPtr), "%08X", va_arg(argList, DWORD));
-                    szFormat += 4;
-                    continue;
-                }
-
-                // Unknown format specifier
-                assert(false);
-            }
-            else
-            {
-                *szBufferPtr++ = *szFormat++;
-            }
-        }
+        nLength = TestStrPrintfV(szMessage, _countof(szMessage), szFormat, argList);
+        TestStrCopy(szBufferPtr, (szBufferEnd - szBufferPtr), szMessage);
+        szBufferPtr += nLength;
 
         // Append the last error
         if(bPrintLastError)
         {
-            nLength = CascStrPrintf(szBufferPtr, (szBufferEnd - szBufferPtr), " (error code: %u)", dwErrCode);
+            nLength = TestStrPrintf(szBufferPtr, (szBufferEnd - szBufferPtr), " (error code: %u)", dwErrCode);
             szBufferPtr += nLength;
         }
 
+        // Remember how much did we print
+        nNewPrinted = (szBufferPtr - szBuffer);
+
         // Shall we pad the string?
-        nLength = szBufferPtr - szMessage;
-        if(nLength < nConsoleWidth)
+        if((nLength = (szBufferPtr - szBuffer - 1)) < nPrevPrinted)
         {
-            // Pad the string with spaces to fill it up to the end of the line
-            nRemainingWidth = nConsoleWidth - nLength - 1;
-            memset(szBufferPtr, 0x20, nRemainingWidth);
-            szBufferPtr += nRemainingWidth;
+            size_t nPadding = nPrevPrinted - nLength;
+
+            if((size_t)(nLength + nPadding) > (size_t)(szBufferEnd - szBufferPtr))
+                nPadding = (szBufferEnd - szBufferPtr);
+
+            memset(szBufferPtr, ' ', nPadding);
+            szBufferPtr += nPadding;
         }
 
-        // Put the newline, if requested
-        *szBufferPtr++ = bPrintEndOfLine ? '\n' : 0;
+        // Shall we add new line?
+        if((bPrintEndOfLine != false) && (szBufferPtr < szBufferEnd))
+            *szBufferPtr++ = '\n';
         *szBufferPtr = 0;
 
         // Remember if we printed a message
-        if(bPrintEndOfLine)
+        if(bPrintEndOfLine != false)
+        {
             bMessagePrinted = true;
+            nPrevPrinted = 0;
+        }
+        else
+        {
+            nPrevPrinted = nNewPrinted;
+        }
 
-        // Spit out the text in one single printf
-        printf("%s", szMessage);
+        // Finally print the message
+        printf("%s", szBuffer);
         nMessageCounter++;
         return dwErrCode;
     }
@@ -225,11 +395,14 @@ class TLogHelper
     {
         va_list argList;
 
+        // Always reset the time trigger
+        TimeTrigger = 0;
+
         // Only print progress when the cooldown is ready
         if(ProgressReady())
         {
             va_start(argList, szFormat);
-            PrintWithClreol(szFormat, argList, true, false, false);
+            PrintWithClreol(szFormat, argList, false, false);
             va_end(argList);
         }
     }
@@ -240,7 +413,7 @@ class TLogHelper
         va_list argList;
 
         va_start(argList, szFormat);
-        PrintWithClreol(szFormat, argList, true, false, true);
+        PrintWithClreol(szFormat, argList, false, true);
         va_end(argList);
     }
 
@@ -260,16 +433,54 @@ class TLogHelper
         int nResult;
 
         va_start(argList, szFormat);
-        nResult = PrintWithClreol(szFormat, argList, true, true, true);
+        nResult = PrintWithClreol(szFormat, argList, true, true);
         va_end(argList);
 
         return nResult;
     }
 
     template <typename XCHAR>
-    int PrintError(const XCHAR * szFormat, const XCHAR * szFileName)
+    int PrintError(const XCHAR * szFormat, const XCHAR * szFileName = NULL)
     {
         return PrintErrorVa(szFormat, szFileName);
+    }
+
+    // Print final verdict
+    DWORD PrintVerdict(DWORD dwErrCode = ERROR_SUCCESS)
+    {
+        LPCTSTR szSaveSubTitle1 = szSubTitle1;
+        LPCTSTR szSaveSubTitle2 = szSubTitle2;
+        TCHAR szSaveMainTitle[0x80];
+
+        // Set both to NULL so they won't be printed
+        TestStrCopy(szSaveMainTitle, _countof(szSaveMainTitle), szMainTitle);
+        szMainTitle = NULL;
+        szSubTitle1 = NULL;
+        szSubTitle2 = NULL;
+
+        // Print the final information
+        if(szSaveMainTitle[0] != 0)
+        {
+            if(DontPrintResult == false)
+            {
+                const TCHAR * szVerdict = (dwErrCode == ERROR_SUCCESS) ? _T("succeeded") : _T("failed");
+
+                if(szSaveSubTitle1 != NULL && szSaveSubTitle2 != NULL)
+                    PrintMessage(_T("%s (%s+%s) %s."), szSaveMainTitle, szSaveSubTitle1, szSaveSubTitle2, szVerdict);
+                else if(szSaveSubTitle1 != NULL)
+                    PrintMessage(_T("%s (%s) %s."), szSaveMainTitle, szSaveSubTitle1, szVerdict);
+                else
+                    PrintMessage(_T("%s %s."), szSaveMainTitle, szVerdict);
+            }
+            else
+            {
+                PrintProgress(" ");
+                printf("\r");
+            }
+        }
+
+        // Return the error code so the caller can pass it fuhrter
+        return dwErrCode;
     }
 
     //
@@ -278,24 +489,16 @@ class TLogHelper
 
     void Lock()
     {
-#ifdef CASCLIB_PLATFORM_WINDOWS
+#ifdef TEST_PLATFORM_WINDOWS
         EnterCriticalSection(&Locker);
 #endif
     }
 
     void Unlock()
     {
-#ifdef CASCLIB_PLATFORM_WINDOWS
+#ifdef TEST_PLATFORM_WINDOWS
         LeaveCriticalSection(&Locker);
 #endif
-    }
-
-    void IncrementTotalBytes(ULONGLONG IncrementValue)
-    {
-        // For some weird reason, this is measurably faster then InterlockedAdd64
-        Lock();
-        TotalBytes = TotalBytes + IncrementValue;
-        Unlock();
     }
 
     //
@@ -347,6 +550,14 @@ class TLogHelper
         return (DWORD)(EndTime - StartTime);
     }
 
+    void IncrementTotalBytes(ULONGLONG IncrementValue)
+    {
+        // For some weird reason, this is measurably faster then InterlockedAdd64
+        Lock();
+        TotalBytes = TotalBytes + IncrementValue;
+        Unlock();
+    }
+
     void FormatTotalBytes(char * szBuffer, size_t ccBuffer)
     {
         ULONGLONG Bytes = TotalBytes;
@@ -359,12 +570,12 @@ class TLogHelper
             // Are we already dividing?
             if(bDividingOn)
             {
-                szBuffer += CascStrPrintf(szBuffer, ccBuffer, " %03u", (DWORD)(Bytes / Divider));
+                szBuffer += TestStrPrintf(szBuffer, ccBuffer, " %03u", (DWORD)(Bytes / Divider));
                 Bytes = Bytes % Divider;
             }
             else if(Bytes > Divider)
             {
-                szBuffer += CascStrPrintf(szBuffer, ccBuffer, "%u", (DWORD)(Bytes / Divider));
+                szBuffer += TestStrPrintf(szBuffer, ccBuffer, "%u", (DWORD)(Bytes / Divider));
                 Bytes = Bytes % Divider;
                 bDividingOn = true;
             }
@@ -372,7 +583,7 @@ class TLogHelper
         }
     }
 
-#ifdef CASCLIB_PLATFORM_WINDOWS
+#ifdef TEST_PLATFORM_WINDOWS
     CRITICAL_SECTION Locker;
 #endif
 
@@ -380,55 +591,22 @@ class TLogHelper
     ULONGLONG ByteCount;                            // For user's convenience: Current number of bytes
     ULONGLONG StartTime;                            // Start time of an operation, in milliseconds
     ULONGLONG EndTime;                              // End time of an operation, in milliseconds
+    const char * UserString;
+    DWORD UserCount;
+    DWORD UserTotal;
+    DWORD TickCount;
+    DWORD TimeTrigger;                              // For triggering elapsed timers
     DWORD TotalFiles;                               // For user's convenience: Total number of files
     DWORD FileCount;                                // For user's convenience: Curernt number of files
-    DWORD DontPrintResult:1;                        // If true, supresset pringing result from the destructor
+    DWORD DontPrintResult:1;                        // If true, supress printing result from the destructor
 
     protected:
 
-    template <typename XCHAR>
-    bool IsFormatSpecifier(const XCHAR * szFormat, const char * szSpecifier)
-    {
-        for(size_t i = 0; szSpecifier[i] != 0; i++)
-        {
-            if(szFormat[i] != szSpecifier[i])
-                return false;
-        }
-        return true;
-    }
-
-    template <typename XCHAR>
-    char * StringCopy(char * szBuffer, const XCHAR * szSource)
-    {
-        while(szSource[0] != 0)
-            *szBuffer++ = (char)(*szSource++);
-        return szBuffer;
-    }
-
-    size_t GetConsoleWidth()
-    {
-        // Only check this once per 100 messages
-        if(nSaveConsoleWidth == 0 || (nMessageCounter % 100) == 0)
-        {
-#ifdef CASCLIB_PLATFORM_WINDOWS
-            CONSOLE_SCREEN_BUFFER_INFO ScreenInfo;
-            GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &ScreenInfo);
-            nSaveConsoleWidth = (ScreenInfo.srWindow.Right - ScreenInfo.srWindow.Left);
-#else
-            // On non-Windows platforms, we assume that width of the console line
-            // is 100 characters
-            nSaveConsoleWidth = 100;
-#endif
-        }
-
-        return nSaveConsoleWidth;
-    }
-
     const char * szMainTitle;                       // Title of the text (usually name)
-    const char * szSubTitle;                        // Title of the text (can be name of the tested file)
-    size_t nSaveConsoleWidth;                       // Saved width of the console window, in chars
+    const TCHAR * szSubTitle1;                      // Title of the text (can be name of the tested file)
+    const TCHAR * szSubTitle2;                      // Title of the text (can be name of the tested file)
     size_t nMessageCounter;
-    size_t nTextLength;                             // Length of the previous progress message
+    size_t nPrevPrinted;                            // Length of the previously printed message
     time_t dwPrevTickCount;
     bool bMessagePrinted;
 };

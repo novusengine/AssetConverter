@@ -41,7 +41,7 @@ TCascFile::TCascFile(TCascStorage * ahs, PCASC_CKEY_ENTRY apCKeyEntry)
 TCascFile::~TCascFile()
 {
     // Free all stuff related to file spans
-    if (pFileSpan != NULL)
+    if(pFileSpan != NULL)
     {
         PCASC_FILE_SPAN pSpanPtr = pFileSpan;
 
@@ -309,6 +309,7 @@ bool WINAPI CascOpenFile(HANDLE hStorage, const void * pvFileName, DWORD dwLocal
     const char * szFileName;
     DWORD FileDataId = CASC_INVALID_ID;
     BYTE CKeyEKeyBuffer[MD5_HASH_SIZE];
+    DWORD dwErrCode = ERROR_SUCCESS;
 
     // This parameter is not used
     CASCLIB_UNUSED(dwLocaleFlags);
@@ -401,7 +402,11 @@ bool WINAPI CascOpenFile(HANDLE hStorage, const void * pvFileName, DWORD dwLocal
             pCKeyEntry = hs->pRootHandler->GetFile(hs, CASC_FILE_DATA_ID_FROM_STRING(pvFileName));
             break;
 
-        default: break;
+        default:
+
+            // Unknown open mode
+            dwErrCode = ERROR_INVALID_PARAMETER;
+            break;
     }
 
     // Perform the open operation
@@ -425,7 +430,7 @@ bool WINAPI CascCloseFile(HANDLE hFile)
     TCascFile * hf;
 
     hf = TCascFile::IsValid(hFile);
-    if (hf != NULL)
+    if(hf != NULL)
     {
         delete hf;
         return true;

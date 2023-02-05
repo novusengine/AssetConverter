@@ -71,7 +71,7 @@ void TextureExtractor::Process()
 		if (reportStatus)
 		{
 			progressFlags |= bitMask;
-			DebugHandler::PrintSuccess("[Texture Extractor] Progress Status (%.2f%% / 100%%)", progress * 10.0f);
+			DebugHandler::Print("[Texture Extractor] Progress Status (%.2f%% / 100%%)", progress * 10.0f);
 		}
 	}
 }

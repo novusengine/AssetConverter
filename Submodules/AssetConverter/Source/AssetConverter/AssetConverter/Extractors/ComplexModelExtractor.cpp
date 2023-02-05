@@ -111,11 +111,11 @@ void ComplexModelExtractor::Process()
 		{
 			if (result)
 			{
-				DebugHandler::PrintSuccess("[ComplexModel Extractor] Extracted %s", fileListEntry.fileName.c_str());
+				DebugHandler::Print("[ComplexModel Extractor] Extracted {0}", fileListEntry.fileName);
 			}
 			else
 			{
-				DebugHandler::PrintWarning("[ComplexModel Extractor] Failed to extract %s", fileListEntry.fileName.c_str());
+				DebugHandler::PrintWarning("[ComplexModel Extractor] Failed to extract {0}", fileListEntry.fileName);
 			}
 		}
 
@@ -127,7 +127,7 @@ void ComplexModelExtractor::Process()
 		if (reportStatus)
 		{
 			progressFlags |= bitMask;
-			DebugHandler::PrintSuccess("[ComplexModel Extractor] Progress Status (%.2f%% / 100%%)", progress * 10.0f);
+			DebugHandler::Print("[ComplexModel Extractor] Progress Status (%.2f%% / 100%%)", progress * 10.0f);
 		}
 	}
 }
