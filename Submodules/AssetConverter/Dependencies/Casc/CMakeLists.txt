@@ -137,7 +137,7 @@ if(CASC_BUILD_TESTS)
     install(TARGETS casc_test RUNTIME DESTINATION bin)
 endif()
 
-option(CASC_BUILD_STATIC_LIB "Build static linked library" OFF)
+option(CASC_BUILD_STATIC_LIB "Build static linked library" ON)
 if(CASC_BUILD_STATIC_LIB)
     message(STATUS "Build static linked library")
     add_library(casc_static STATIC ${SRC_FILES} ${HEADER_FILES})
