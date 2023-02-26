@@ -154,7 +154,7 @@ void MapExtractor::Process()
                             continue;
 
                         const std::string& m2PathStr = cascLoader->GetFilePathFromListFileID(placementInfo.nameHash);
-                        fs::path m2Path = fs::path(m2PathStr).replace_extension(".cmodel");
+                        fs::path m2Path = fs::path(m2PathStr).replace_extension(".complexmodel");
 
                         u32 nameHash = StringUtils::fnv1a_32(m2Path.string().c_str(), m2Path.string().size());
                         placementInfo.nameHash = nameHash;

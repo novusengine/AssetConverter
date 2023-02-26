@@ -181,7 +181,7 @@ void MapObjectExtractor::Process()
 		if (reportStatus)
 		{
 			progressFlags |= bitMask;
-			DebugHandler::Print("[MapObject Extractor] Progress Status (%.2f%% / 100%%)", progress * 10.0f);
+			DebugHandler::Print("[MapObject Extractor] Progress Status ({0:.2f}% / 100%)", progress * 10.0f);
 		}
 	}
 }

@@ -127,7 +127,7 @@ void ComplexModelExtractor::Process()
 		if (reportStatus)
 		{
 			progressFlags |= bitMask;
-			DebugHandler::Print("[ComplexModel Extractor] Progress Status (%.2f%% / 100%%)", progress * 10.0f);
+			DebugHandler::Print("[ComplexModel Extractor] Progress Status ({0:.2f}% / 100%)", progress * 10.0f);
 		}
 	}
 }
