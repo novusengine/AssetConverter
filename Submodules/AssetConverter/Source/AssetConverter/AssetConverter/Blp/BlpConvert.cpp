@@ -95,21 +95,12 @@ namespace BLP
 		if (!image.initialize(cuttlefish::Image::Format::RGBA8, header.width, header.height))
 			return;
 
-		for (int y = 0; y < header.height; y++)
+		for (uint32_t y = 0; y < header.height; y++)
 		{
-			for (int x = 0; x < header.width; x++)
-			{
-				int pixelID = x + (y * header.width);
-				uint32_t pixelColor = imageData[pixelID];
+			void* scanLine = image.scanline(y);
+			int pixelDataOffset = (y * header.width);
 
-				cuttlefish::ColorRGBAd color;
-				color.r = ((pixelColor >> 16) & 0xFF) / 255.0f;
-				color.g = ((pixelColor >> 8) & 0xFF) / 255.0f;
-				color.b = (pixelColor & 0xFF) / 255.0f;
-				color.a = ((pixelColor >> 24) & 0xFF) / 255.0f;
-
-				image.setPixel(y, x, color);
-			}
+			memcpy(scanLine, &imageData[pixelDataOffset], header.width * sizeof(uint32_t));
 		}
 
 		cuttlefish::Texture texture(cuttlefish::Texture::Dimension::Dim2D, header.width, header.height);
@@ -171,13 +162,15 @@ namespace BLP
 
 		cuttlefish::Texture texture(dimension, width, height, layers);
 
-		for (int layer = 0; layer < layers; layer++)
+		for (uint32_t layer = 0; layer < layers; layer++)
 		{
-			for (int y = 0; y < height; y++)
+			uint32_t layerOffset = (layer * (height * width));
+
+			for (uint32_t y = 0; y < height; y++)
 			{
-				for (int x = 0; x < width; x++)
+				for (uint32_t x = 0; x < width; x++)
 				{
-					int pixelID = (x + (y * width)) + (layer * (height * width));
+					uint32_t pixelID = (x + (y * width)) + layerOffset;
 					uint32_t pixelColor = reinterpret_cast<uint32_t*>(inputBytes)[pixelID];
 
 					cuttlefish::ColorRGBAd color;

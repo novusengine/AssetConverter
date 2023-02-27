@@ -90,7 +90,5 @@ namespace BLP
         tConvertFunction GetDxtConvertFunction(const Format& format) const;
 
         void SwapByteOrder(uint32_t& ui) const;
-
-
     };
 }

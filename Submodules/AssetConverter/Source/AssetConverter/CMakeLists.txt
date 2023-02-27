@@ -12,6 +12,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
     meshoptimizer
     casc_static
     cuttlefish_lib
+    enkiTS::enkiTS
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER ${ROOT_FOLDER} LINKER_LANGUAGE CXX)
