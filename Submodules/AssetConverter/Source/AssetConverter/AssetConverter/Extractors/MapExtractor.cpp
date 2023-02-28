@@ -17,7 +17,9 @@
 #include <FileFormat/Warcraft/Parsers/WdtParser.h>
 #include <FileFormat/Warcraft/Parsers/AdtParser.h>
 
+#include <enkiTS/TaskScheduler.h>
 #include <glm/gtx/euler_angles.inl>
+
 #include <string_view>
 
 void MapExtractor::Process()
@@ -28,7 +30,12 @@ void MapExtractor::Process()
     Client::ClientDB<Client::Definitions::Map>& maps = ClientDBExtractor::maps;
     StringTable& stringTable = maps.stringTable;
 
-    for (u32 i = 0; i < maps.data.size(); i++)
+    bool createChunkAlphaMaps = runtime->json["Extraction"]["Map"]["BlendMaps"];
+
+    u32 numMapEntries = static_cast<u32>(maps.data.size());
+    DebugHandler::Print("[MapExtractor] Processing {0} maps", numMapEntries);
+
+    for (u32 i = 0; i < numMapEntries; i++)
     {
         const Client::Definitions::Map& map = maps.data[i];
         const std::string& mapInternalName = stringTable.GetString(map.internalName);
@@ -50,17 +57,15 @@ void MapExtractor::Process()
             continue;
 
         Adt::WdtParser wdtParser = { };
-        Adt::Parser adtParser = { };
 
         Adt::Wdt wdt = { };
         if (!wdtParser.TryParse(fileWDT, wdt))
         {
-            DebugHandler::PrintWarning("[MapExtractor] Failed to extract %s (Corrupt WDT)", mapInternalName.c_str());
+            DebugHandler::PrintWarning("[MapExtractor] Failed to extract {0} (Corrupt WDT)", mapInternalName);
             continue;
         }
 
         std::filesystem::create_directories(runtime->paths.map / mapInternalName);
-        std::filesystem::create_directories(runtime->paths.textureBlendMap / mapInternalName);
 
         Map::Layout layout = { };
         layout.flags.UseMapObjectAsBase = wdt.mphd.flags.UseGlobalMapObj;
@@ -95,126 +100,133 @@ void MapExtractor::Process()
         }
         else
         {
-            for (u32 chunkID = 0; chunkID < Terrain::CHUNK_NUM_PER_MAP; chunkID++)
+            std::filesystem::create_directories(runtime->paths.textureBlendMap / mapInternalName);
+
+            enki::TaskSet convertMapTask(Terrain::CHUNK_NUM_PER_MAP, [&runtime, &cascLoader, &map, &mapInternalName, &wdt, createChunkAlphaMaps](enki::TaskSetPartition range, uint32_t threadNum)
             {
-                u32 chunkGridPosX = chunkID % 64;
-                u32 chunkGridPosY = chunkID / 64;
+                Adt::Parser adtParser = { };
 
-                const Adt::MAIN::AreaInfo& areaInfo = wdt.main.areaInfos[chunkGridPosX][chunkGridPosY];
-                if (!areaInfo.flags.IsUsed)
-                    continue;
-
-                const Adt::MAID::FileIDs& fileIDs = wdt.maid.fileIDs[chunkGridPosX][chunkGridPosY];
-                if (fileIDs.adtRootFileID == 0 || fileIDs.adtTextureFileID == 0 || fileIDs.adtObject1FileID == 0)
-                    continue;
-
-                std::shared_ptr<Bytebuffer> rootBuffer = cascLoader->GetFileByID(fileIDs.adtRootFileID);
-                std::shared_ptr<Bytebuffer> textBuffer = cascLoader->GetFileByID(fileIDs.adtTextureFileID);
-                std::shared_ptr<Bytebuffer> objBuffer = cascLoader->GetFileByID(fileIDs.adtObject1FileID);
-
-                if (!rootBuffer)
-                    continue;
-
-                Adt::Layout adt = { };
+                for (u32 chunkID = range.start; chunkID < range.end; chunkID++)
                 {
-                    adt.mapID = map.id;
-                    adt.chunkID = chunkID;
-                }
+                    u32 chunkGridPosX = chunkID % 64;
+                    u32 chunkGridPosY = chunkID / 64;
 
-                if (!adtParser.TryParse(rootBuffer, textBuffer, objBuffer, wdt, adt))
-                    continue;
+                    const Adt::MAIN::AreaInfo& areaInfo = wdt.main.areaInfos[chunkGridPosX][chunkGridPosY];
+                    if (!areaInfo.flags.IsUsed)
+                        continue;
 
-                Map::Chunk chunk = { };
-                if (!Map::Chunk::FromADT(adt, chunk))
-                    continue;
+                    const Adt::MAID::FileIDs& fileIDs = wdt.maid.fileIDs[chunkGridPosX][chunkGridPosY];
+                    if (fileIDs.adtRootFileID == 0 || fileIDs.adtTextureFileID == 0 || fileIDs.adtObject1FileID == 0)
+                        continue;
 
-                // Post Processing
-                {
-                    for (u32 i = 0; i < chunk.mapObjectPlacements.size(); i++)
+                    std::shared_ptr<Bytebuffer> rootBuffer = cascLoader->GetFileByID(fileIDs.adtRootFileID);
+                    std::shared_ptr<Bytebuffer> textBuffer = cascLoader->GetFileByID(fileIDs.adtTextureFileID);
+                    std::shared_ptr<Bytebuffer> objBuffer = cascLoader->GetFileByID(fileIDs.adtObject1FileID);
+
+                    if (!rootBuffer)
+                        continue;
+
+                    Adt::Layout adt = { };
                     {
-                        Terrain::Placement& placementInfo = chunk.mapObjectPlacements[i];
-
-                        if (placementInfo.nameHash == 0 ||
-                            placementInfo.nameHash == std::numeric_limits<u32>().max())
-                            continue;
-
-                        const std::string& wmoPathStr = cascLoader->GetFilePathFromListFileID(placementInfo.nameHash);
-                        fs::path wmoPath = fs::path(wmoPathStr).replace_extension(".mapobject");
-
-                        u32 nameHash = StringUtils::fnv1a_32(wmoPath.string().c_str(), wmoPath.string().size());
-                        placementInfo.nameHash = nameHash;
+                        adt.mapID = map.id;
+                        adt.chunkID = chunkID;
                     }
 
-                    for (u32 i = 0; i < chunk.complexModelPlacements.size(); i++)
+                    if (!adtParser.TryParse(rootBuffer, textBuffer, objBuffer, wdt, adt))
+                        continue;
+
+                    Map::Chunk chunk = { };
+                    if (!Map::Chunk::FromADT(adt, chunk))
+                        continue;
+
+                    // Post Processing
                     {
-                        Terrain::Placement& placementInfo = chunk.complexModelPlacements[i];
-
-                        if (placementInfo.nameHash == 0 ||
-                            placementInfo.nameHash == std::numeric_limits<u32>().max())
-                            continue;
-
-                        const std::string& m2PathStr = cascLoader->GetFilePathFromListFileID(placementInfo.nameHash);
-                        fs::path m2Path = fs::path(m2PathStr).replace_extension(".complexmodel");
-
-                        u32 nameHash = StringUtils::fnv1a_32(m2Path.string().c_str(), m2Path.string().size());
-                        placementInfo.nameHash = nameHash;
-                    }
-
-                    // 0 = r, 1 = g, 2 = b, 3 = a
-                    u32 swizzleMap[Terrain::CHUNK_ALPHAMAP_CELL_NUM_CHANNELS] =
-                    {
-                        2,1,0,3
-                    };
-
-                    // Convert alphamap data into a texture
-                    bool createChunkAlphaMaps = runtime->json["Extraction"]["Map"]["BlendMaps"];
-
-                    std::shared_ptr<Bytebuffer> alphaMapBuffer = Bytebuffer::Borrow<Terrain::CHUNK_ALPHAMAP_TOTAL_BYTE_SIZE>();
-                    memset(alphaMapBuffer->GetDataPointer(), 0, Terrain::CHUNK_ALPHAMAP_TOTAL_BYTE_SIZE);
-
-                    for (u16 i = 0; i < Terrain::CHUNK_NUM_CELLS; i++)
-                    {
-                        Map::Cell& cell = chunk.cells[i];
-
-                        const u32 numLayers = static_cast<u32>(adt.cellInfos[i].mcly.data.size());
-                        const u32 basePixelDestination = (i * Terrain::CHUNK_ALPHAMAP_CELL_RESOLUTION * Terrain::CHUNK_ALPHAMAP_CELL_NUM_CHANNELS);
-
-                        for (u32 j = 0; j < 4; j++)
+                        for (u32 i = 0; i < chunk.mapObjectPlacements.size(); i++)
                         {
-                            u32 fileID = cell.layers[j].textureID;
-                            if (fileID == 0 || fileID == std::numeric_limits<u32>().max())
+                            Terrain::Placement& placementInfo = chunk.mapObjectPlacements[i];
+
+                            if (placementInfo.nameHash == 0 ||
+                                placementInfo.nameHash == std::numeric_limits<u32>().max())
                                 continue;
 
-                            fs::path texturePath = cascLoader->GetFilePathFromListFileID(fileID);
-                            if (texturePath.empty())
-                            {
-                                cell.layers[j].textureID = std::numeric_limits<u32>().max();
-                                continue;
-                            }
+                            const std::string& wmoPathStr = cascLoader->GetFilePathFromListFileID(placementInfo.nameHash);
+                            fs::path wmoPath = fs::path(wmoPathStr).replace_extension(".mapobject");
 
-                            texturePath.replace_extension("dds").make_preferred();
-
-                            std::string texturePathStr = texturePath.string();
-                            std::transform(texturePathStr.begin(), texturePathStr.end(), texturePathStr.begin(), ::tolower);
-
-                            u32 textureNameHash = StringUtils::fnv1a_32(texturePathStr.c_str(), texturePathStr.length());
-                            cell.layers[j].textureID = textureNameHash;
-
-                            // If the layer has alpha data, add it to our per-chunk alphamap
-                            if (createChunkAlphaMaps && j > 0)
-                            {
-                                u32 channel = swizzleMap[j - 1];
-
-                                for (u32 pixel = 0; pixel < Terrain::CHUNK_ALPHAMAP_CELL_RESOLUTION; pixel++)
-                                {
-                                    u32 dst = basePixelDestination + (pixel * Terrain::CHUNK_ALPHAMAP_CELL_NUM_CHANNELS) + channel;
-                                    alphaMapBuffer->GetDataPointer()[dst] = adt.cellInfos[i].mcal.data[j - 1].alphaMap[pixel];
-                                }
-                            }
+                            u32 nameHash = StringUtils::fnv1a_32(wmoPath.string().c_str(), wmoPath.string().size());
+                            placementInfo.nameHash = nameHash;
                         }
 
-                        if (createChunkAlphaMaps)
+                        for (u32 i = 0; i < chunk.complexModelPlacements.size(); i++)
                         {
+                            Terrain::Placement& placementInfo = chunk.complexModelPlacements[i];
+
+                            if (placementInfo.nameHash == 0 ||
+                                placementInfo.nameHash == std::numeric_limits<u32>().max())
+                                continue;
+
+                            const std::string& m2PathStr = cascLoader->GetFilePathFromListFileID(placementInfo.nameHash);
+                            fs::path m2Path = fs::path(m2PathStr).replace_extension(".complexmodel");
+
+                            u32 nameHash = StringUtils::fnv1a_32(m2Path.string().c_str(), m2Path.string().size());
+                            placementInfo.nameHash = nameHash;
+                        }
+
+                        // 0 = r, 1 = g, 2 = b, 3 = a
+                        u32 swizzleMap[Terrain::CHUNK_ALPHAMAP_CELL_NUM_CHANNELS] =
+                        {
+                            2,1,0,3
+                        };
+
+                        std::shared_ptr<Bytebuffer> alphaMapBuffer = Bytebuffer::Borrow<Terrain::CHUNK_ALPHAMAP_TOTAL_BYTE_SIZE>();
+                        memset(alphaMapBuffer->GetDataPointer(), 0, Terrain::CHUNK_ALPHAMAP_TOTAL_BYTE_SIZE);
+
+                        bool isAlphaMapSet = false;
+                        
+                        for (u16 i = 0; i < Terrain::CHUNK_NUM_CELLS; i++)
+                        {
+                            Map::Cell& cell = chunk.cells[i];
+
+                            const u32 numLayers = static_cast<u32>(adt.cellInfos[i].mcly.data.size());
+                            const u32 basePixelDestination = (i * Terrain::CHUNK_ALPHAMAP_CELL_RESOLUTION * Terrain::CHUNK_ALPHAMAP_CELL_NUM_CHANNELS);
+
+                            for (u32 j = 0; j < 4; j++)
+                            {
+                                u32 fileID = cell.layers[j].textureID;
+                                if (fileID == 0 || fileID == std::numeric_limits<u32>().max())
+                                    continue;
+
+                                fs::path texturePath = cascLoader->GetFilePathFromListFileID(fileID);
+                                if (texturePath.empty())
+                                {
+                                    cell.layers[j].textureID = std::numeric_limits<u32>().max();
+                                    continue;
+                                }
+
+                                texturePath.replace_extension("dds").make_preferred();
+
+                                std::string texturePathStr = texturePath.string();
+                                std::transform(texturePathStr.begin(), texturePathStr.end(), texturePathStr.begin(), ::tolower);
+
+                                u32 textureNameHash = StringUtils::fnv1a_32(texturePathStr.c_str(), texturePathStr.length());
+                                cell.layers[j].textureID = textureNameHash;
+
+                                // If the layer has alpha data, add it to our per-chunk alphamap
+                                if (j > 0)
+                                {
+                                    u32 channel = swizzleMap[j - 1];
+
+                                    for (u32 pixel = 0; pixel < Terrain::CHUNK_ALPHAMAP_CELL_RESOLUTION; pixel++)
+                                    {
+                                        u32 dst = basePixelDestination + (pixel * Terrain::CHUNK_ALPHAMAP_CELL_NUM_CHANNELS) + channel;
+
+                                        u8 pixelValue = adt.cellInfos[i].mcal.data[j - 1].alphaMap[pixel];
+                                        isAlphaMapSet |= pixelValue != 0;
+
+                                        alphaMapBuffer->GetDataPointer()[dst] = pixelValue;
+                                    }
+                                }
+                            }
+
                             // Convert Old Alpha to New Alpha
                             if (!wdt.mphd.flags.UseBigAlpha && numLayers > 1)
                             {
@@ -230,6 +242,7 @@ void MapExtractor::Process()
                                     u32 redDst = basePixelDestination + (pixel * Terrain::CHUNK_ALPHAMAP_CELL_NUM_CHANNELS) + swizzleMap[0];
                                     u32 greenDst = basePixelDestination + (pixel * Terrain::CHUNK_ALPHAMAP_CELL_NUM_CHANNELS) + swizzleMap[1];
                                     u32 blueDst = basePixelDestination + (pixel * Terrain::CHUNK_ALPHAMAP_CELL_NUM_CHANNELS) + swizzleMap[2];
+                                    u32 alphaDst = basePixelDestination + (pixel * Terrain::CHUNK_ALPHAMAP_CELL_NUM_CHANNELS) + swizzleMap[3];
 
                                     f32 redPixelFloat = alphaMapBuffer->GetDataPointer()[redDst] / 255.f;
                                     f32 greenPixelFloat = alphaMapBuffer->GetDataPointer()[greenDst] / 255.f;
@@ -248,44 +261,49 @@ void MapExtractor::Process()
                                     alphaMapBuffer->GetDataPointer()[redDst] = redPixelByte;
                                     alphaMapBuffer->GetDataPointer()[greenDst] = greenPixelByte;
                                     alphaMapBuffer->GetDataPointer()[blueDst] = bluePixelByte;
+                                    alphaMapBuffer->GetDataPointer()[alphaDst] = 1;
                                 }
                             }
                         }
+
+                        std::string localChunkBlendMapPath = "blendmaps\\" + mapInternalName + "\\" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".dds";
+                        chunk.chunkAlphaMapTextureHash = (StringUtils::fnv1a_32(localChunkBlendMapPath.c_str(), localChunkBlendMapPath.length()) * isAlphaMapSet) + (std::numeric_limits<u32>().max() * !isAlphaMapSet);
+
+                        if (createChunkAlphaMaps && isAlphaMapSet)
+                        {
+                            std::string chunkBlendMapOutputPath = (runtime->paths.texture / localChunkBlendMapPath).string();
+                            
+                            BLP::BlpConvert blpConvert;
+                            blpConvert.ConvertRaw(64, 64, Terrain::CHUNK_NUM_CELLS, alphaMapBuffer->GetDataPointer(), Terrain::CHUNK_ALPHAMAP_TOTAL_BYTE_SIZE, BLP::InputFormat::BGRA_8UB, BLP::Format::BC1, chunkBlendMapOutputPath, false);
+                        }
+
+                        std::string localChunkPath = mapInternalName + "\\" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".chunk";
+                        std::string chunkOutputPath = (runtime->paths.map / localChunkPath).string();
+                        chunk.Save(chunkOutputPath);
                     }
-
-                    std::string localChunkBlendMapPath = "blendmaps\\" + mapInternalName + "\\" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".dds";
-                    chunk.chunkAlphaMapTextureHash = StringUtils::fnv1a_32(localChunkBlendMapPath.c_str(), localChunkBlendMapPath.length());
-
-                    if (createChunkAlphaMaps)
-                    {
-                        std::string chunkBlendMapOutputPath = (runtime->paths.texture / localChunkBlendMapPath).string();
-
-                        BLP::BlpConvert blpConvert;
-                        blpConvert.ConvertRaw(64, 64, Terrain::CHUNK_NUM_CELLS, alphaMapBuffer->GetDataPointer(), Terrain::CHUNK_ALPHAMAP_TOTAL_BYTE_SIZE, BLP::InputFormat::BGRA_8UB, BLP::Format::BC1, chunkBlendMapOutputPath, false);
-                    }
-
-                    std::string localChunkPath = mapInternalName + "\\" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".chunk";
-                    std::string chunkOutputPath = (runtime->paths.map / localChunkPath).string();
-                    chunk.Save(chunkOutputPath);
                 }
-            }
+            });
 
-            std::shared_ptr<Bytebuffer> buffer = Bytebuffer::Borrow<sizeof(Map::Layout)>();
+            convertMapTask.m_Priority = enki::TaskPriority::TASK_PRIORITY_HIGH;
+            runtime->scheduler.AddTaskSetToPipe(&convertMapTask);
+            runtime->scheduler.WaitforTask(&convertMapTask);
+        }
 
-            std::string localMapPath = mapInternalName + "\\" + mapInternalName + ".map";
-            FileWriter fileWriter(runtime->paths.map / localMapPath, buffer);
+        std::shared_ptr<Bytebuffer> buffer = Bytebuffer::Borrow<sizeof(Map::Layout)>();
 
-            if (!buffer->Put(layout))
-                continue;
+        std::string localMapPath = mapInternalName + "\\" + mapInternalName + ".map";
+        FileWriter fileWriter(runtime->paths.map / localMapPath, buffer);
 
-            if (fileWriter.Write())
-            {
-                DebugHandler::Print("[Map Extractor] Extracted {0}", mapInternalName);
-            }
-            else
-            {
-                DebugHandler::PrintWarning("[Map Extractor] Failed to extract {0}", mapInternalName);
-            }
+        if (!buffer->Put(layout))
+            continue;
+
+        if (fileWriter.Write())
+        {
+            DebugHandler::Print("[Map Extractor] Extracted {0}", mapInternalName);
+        }
+        else
+        {
+            DebugHandler::PrintWarning("[Map Extractor] Failed to extract {0}", mapInternalName);
         }
     }
 }

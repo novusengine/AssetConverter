@@ -1,4 +1,5 @@
 #pragma once
+#include <enkiTS/TaskScheduler.h>
 #include <json/json.hpp>
 
 #include <filesystem>
@@ -22,5 +23,6 @@ public:
 public:
 	bool isInDebugMode = false;
 	Paths paths = { };
+	enki::TaskScheduler scheduler;
 	nlohmann::ordered_json json = { };
 };

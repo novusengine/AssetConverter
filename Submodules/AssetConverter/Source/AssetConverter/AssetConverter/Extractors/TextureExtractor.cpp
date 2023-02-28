@@ -25,6 +25,8 @@ void TextureExtractor::Process()
 		u32 fileID = 0;
 		std::string fileName;
 		std::string path;
+
+		bool useCompression = true;
 	};
 
 	std::vector<FileListEntry> fileList = { };
@@ -42,16 +44,17 @@ void TextureExtractor::Process()
 		std::transform(pathStr.begin(), pathStr.end(), pathStr.begin(), ::tolower);
 	
 		fs::path outputPath = (runtime->paths.texture / pathStr).replace_extension("dds");
-
+	
 		if (fs::exists(outputPath))
 			continue;
-
+	
 		fs::create_directories(outputPath.parent_path());
 	
 		FileListEntry& fileListEntry = fileList.emplace_back();
 		fileListEntry.fileID = itr.second;
 		fileListEntry.fileName = outputPath.filename().string();
 		fileListEntry.path = outputPath.string();
+		fileListEntry.useCompression = !StringUtils::BeginsWith(pathStr, "interface");
 	}
 
 	BLP::BlpConvert blpConvert;
@@ -73,7 +76,7 @@ void TextureExtractor::Process()
 			if (!buffer)
 				return;
 
-			blpConvert.ConvertBLP(buffer->GetDataPointer(), buffer->writtenData, fileListEntry.path, true);
+			blpConvert.ConvertBLP(buffer->GetDataPointer(), buffer->writtenData, fileListEntry.path, true, fileListEntry.useCompression);
 
 			f32 progress = (static_cast<f32>(numFilesConverted++) / static_cast<f32>(numFiles - 1)) * 10.0f;
 			u32 bitToCheck = static_cast<u32>(progress);

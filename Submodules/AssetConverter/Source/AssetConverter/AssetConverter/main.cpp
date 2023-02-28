@@ -43,6 +43,10 @@ i32 main()
 			fs::create_directories(paths.complexModel);
 		}
 
+		// Setup Scheduler
+		{
+			runtime->scheduler.Initialize();
+		}
 		// Setup Json
 		{
 			static const std::string CONFIG_VERSION = "0.2";

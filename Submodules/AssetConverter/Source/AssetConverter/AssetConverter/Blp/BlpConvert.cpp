@@ -37,7 +37,7 @@ namespace BLP
 		}
 	}
 
-	void BlpConvert::ConvertBLP(unsigned char* inputBytes, std::size_t size, const std::string& outputPath, bool generateMipmaps)
+	void BlpConvert::ConvertBLP(unsigned char* inputBytes, std::size_t size, const std::string& outputPath, bool generateMipmaps, bool useCompression)
 	{
 		ByteStream stream(inputBytes, size);
 		BlpHeader header = stream.read<BlpHeader>();
@@ -60,35 +60,44 @@ namespace BLP
 		std::vector<uint32_t> imageData;
 		LoadFirstLayer(header, stream, imageData);
 
-		if (format == Format::BC1)
+		useCompression |= !useCompression && (header.width > 512 || header.height > 512);
+
+		if (useCompression)
 		{
-			if (header.alphaDepth == 1)
+			if (format == Format::BC1)
 			{
-				textureFormat = cuttlefish::Texture::Format::BC1_RGBA;
+				if (header.alphaDepth == 1)
+				{
+					textureFormat = cuttlefish::Texture::Format::BC1_RGBA;
+				}
+				else
+				{
+					textureFormat = cuttlefish::Texture::Format::BC1_RGB;
+				}
 			}
-			else
+			else if (format == Format::BC2)
 			{
-				textureFormat = cuttlefish::Texture::Format::BC1_RGB;
+				textureFormat = cuttlefish::Texture::Format::BC2;
 			}
-		}
-		else if (format == Format::BC2)
-		{
-			textureFormat = cuttlefish::Texture::Format::BC2;
-		}
-		else if (format == Format::BC3)
-		{
-			textureFormat = cuttlefish::Texture::Format::BC3;
-		}
-		else
-		{
-			if (header.alphaDepth > 0)
+			else if (format == Format::BC3)
 			{
 				textureFormat = cuttlefish::Texture::Format::BC3;
 			}
 			else
 			{
-				textureFormat = cuttlefish::Texture::Format::BC1_RGB;
+				if (header.alphaDepth > 0)
+				{
+					textureFormat = cuttlefish::Texture::Format::BC3;
+				}
+				else
+				{
+					textureFormat = cuttlefish::Texture::Format::BC1_RGB;
+				}
 			}
+		}
+		else
+		{
+			textureFormat = cuttlefish::Texture::Format::R8G8B8A8;
 		}
 
 		cuttlefish::Image image;
@@ -101,6 +110,11 @@ namespace BLP
 			int pixelDataOffset = (y * header.width);
 
 			memcpy(scanLine, &imageData[pixelDataOffset], header.width * sizeof(uint32_t));
+		}
+
+		if (header.compression == 1)
+		{
+			image.swizzle(cuttlefish::Image::Channel::Blue, cuttlefish::Image::Channel::Green, cuttlefish::Image::Channel::Red, cuttlefish::Image::Channel::Alpha);
 		}
 
 		cuttlefish::Texture texture(cuttlefish::Texture::Dimension::Dim2D, header.width, header.height);
@@ -168,19 +182,11 @@ namespace BLP
 
 			for (uint32_t y = 0; y < height; y++)
 			{
-				for (uint32_t x = 0; x < width; x++)
-				{
-					uint32_t pixelID = (x + (y * width)) + layerOffset;
-					uint32_t pixelColor = reinterpret_cast<uint32_t*>(inputBytes)[pixelID];
+				void* scanLine = image.scanline(y);
+				uint32_t pixelDataOffset = layerOffset + (y * width);
+				uint32_t* pixelColor = &reinterpret_cast<uint32_t*>(inputBytes)[pixelDataOffset];
 
-					cuttlefish::ColorRGBAd color;
-					color.r = ((pixelColor >> 16) & 0xFF) / 255.0f;
-					color.g = ((pixelColor >> 8) & 0xFF) / 255.0f;
-					color.b = (pixelColor & 0xFF) / 255.0f;
-					color.a = ((pixelColor >> 24) & 0xFF) / 255.0f;
-
-					image.setPixel(x, y, color);
-				}
+				memcpy(scanLine, pixelColor, width * sizeof(uint32_t));
 			}
 
 			if (!texture.setImage(image, 0, layer))
