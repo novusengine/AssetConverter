@@ -54,7 +54,7 @@ void ComplexModelExtractor::Process()
 
 	u32 numFiles = static_cast<u32>(fileList.size());
 	u16 progressFlags = 0;
-	DebugHandler::Print("[ComplexModel Extractor] Processing %u files", numFiles);
+	DebugHandler::Print("[ComplexModel Extractor] Processing {0} files", numFiles);
 
 	M2::Parser m2Parser = {};
 	for (u32 i = 0; i < numFiles; i++)
@@ -127,7 +127,7 @@ void ComplexModelExtractor::Process()
 		if (reportStatus)
 		{
 			progressFlags |= bitMask;
-			DebugHandler::Print("[ComplexModel Extractor] Progress Status ({0:.2f}% / 100%)", progress * 10.0f);
+			DebugHandler::Print("[ComplexModel Extractor] Progress Status ({0:.0f}% / 100%)", progress * 10.0f);
 		}
 	}
 }
