@@ -6,6 +6,7 @@
 #include <Base/Util/DebugHandler.h>
 #include <Base/Util/StringUtils.h>
 
+#include <FileFormat/Novus/Model/ComplexModel.h>
 #include <FileFormat/Novus/Model/MapObject.h>
 #include <FileFormat/Warcraft/Shared.h>
 #include <FileFormat/Warcraft/WMO/Wmo.h>
@@ -59,7 +60,7 @@ void MapObjectExtractor::Process()
 		std::string pathStr = itr.first;
 		std::transform(pathStr.begin(), pathStr.end(), pathStr.begin(), ::tolower);
 
-		fs::path outputPath = (runtime->paths.mapObject / pathStr).replace_extension("mapobject");
+		fs::path outputPath = (runtime->paths.complexModel / pathStr).replace_extension("complexmodel");
 		fs::create_directories(outputPath.parent_path());
 
 		FileListEntry& fileListEntry = fileList.emplace_back();
@@ -69,119 +70,139 @@ void MapObjectExtractor::Process()
 	}
 
 	u32 numFiles = static_cast<u32>(fileList.size());
+
+	std::mutex printMutex;
+	u32 numProcessedFiles = 0;
 	u16 progressFlags = 0;
 	DebugHandler::Print("[MapObject Extractor] Processing {0} files", numFiles);
 
-	Wmo::Parser wmoParser = { };
-	for (u32 i = 0; i < numFiles; i++)
+	enki::TaskSet convertWMOTask(numFiles, [&runtime, &cascLoader, &fileList, &numProcessedFiles, &progressFlags, &printMutex, numFiles](enki::TaskSetPartition range, uint32_t threadNum)
 	{
-		const FileListEntry& fileListEntry = fileList[i];
-
-		Wmo::Layout wmo = { };
-		std::shared_ptr<Bytebuffer> rootBuffer = cascLoader->GetFileByID(fileListEntry.fileID);
-		if (!wmoParser.TryParse(Wmo::Parser::ParseType::Root, rootBuffer, wmo))
-			continue;
-
-		for (u32 i = 0; i < wmo.mohd.groupCount; i++)
+		Wmo::Parser wmoParser = { };
+		for (u32 index = range.start; index < range.end; index++)
 		{
-			u32 fileID = wmo.gfid.data[i].fileID;
-			if (fileID == 0)
+			const FileListEntry& fileListEntry = fileList[index];
+
+			Wmo::Layout wmo = { };
+			std::shared_ptr<Bytebuffer> rootBuffer = cascLoader->GetFileByID(fileListEntry.fileID);
+			if (!wmoParser.TryParse(Wmo::Parser::ParseType::Root, rootBuffer, wmo))
 				continue;
 
-			std::shared_ptr<Bytebuffer> groupBuffer = cascLoader->GetFileByID(fileID);
-			if (!groupBuffer)
-				continue;
-
-			if (!wmoParser.TryParse(Wmo::Parser::ParseType::Group, groupBuffer, wmo))
-				continue;
-		}
-
-		Model::MapObject mapObject = { };
-		if (!Model::MapObject::FromWMO(wmo, mapObject))
-			continue;
-
-		// Post Processing
-		{
-			std::string pathAsString = "";
-
-			// Convert Material FileIDs to TextureHash
-			for (u32 i = 0; i < mapObject.materials.size(); i++)
+			for (u32 i = 0; i < wmo.mohd.groupCount; i++)
 			{
-				Model::MapObject::Material& material = mapObject.materials[i];
+				u32 fileID = wmo.gfid.data[i].fileID;
+				if (fileID == 0)
+					continue;
 
-				for (u32 j = 0; j < 3; j++)
+				std::shared_ptr<Bytebuffer> groupBuffer = cascLoader->GetFileByID(fileID);
+				if (!groupBuffer)
+					continue;
+
+				if (!wmoParser.TryParse(Wmo::Parser::ParseType::Group, groupBuffer, wmo))
+					continue;
+			}
+
+
+			Model::MapObject mapObject = { };
+			if (!Model::MapObject::FromWMO(wmo, mapObject))
+				continue;
+
+			// Post Processing
+			{
+				std::string pathAsString = "";
+
+				// Convert Material FileIDs to TextureHash
+				for (u32 i = 0; i < mapObject.materials.size(); i++)
 				{
-					u32 textureFileID = material.textureID[j];
-					if (textureFileID == std::numeric_limits<u32>().max())
-						continue;
+					Model::MapObject::Material& material = mapObject.materials[i];
 
-					const std::string& cascFilePath = cascLoader->GetFilePathFromListFileID(textureFileID);
-					if (cascFilePath.size() == 0)
+					for (u32 j = 0; j < 3; j++)
 					{
-						material.textureID[j] = std::numeric_limits<u32>().max();
-						continue;
+						u32 textureFileID = material.textureID[j];
+						if (textureFileID == std::numeric_limits<u32>().max())
+							continue;
+
+						const std::string& cascFilePath = cascLoader->GetFilePathFromListFileID(textureFileID);
+						if (cascFilePath.size() == 0)
+						{
+							material.textureID[j] = std::numeric_limits<u32>().max();
+							continue;
+						}
+
+						fs::path texturePath = cascFilePath;
+						texturePath.replace_extension("dds").make_preferred();
+
+						pathAsString = texturePath.string();
+						std::transform(pathAsString.begin(), pathAsString.end(), pathAsString.begin(), ::tolower);
+
+						material.textureID[j] = StringUtils::fnv1a_32(pathAsString.c_str(), pathAsString.length());
 					}
+				}
 
-					fs::path texturePath = cascFilePath;
-					texturePath.replace_extension("dds").make_preferred();
+				// Convert Decoration FileIDs to PathHash
+				{
+					for (u32 i = 0; i < mapObject.decorations.size(); i++)
+					{
+						Model::MapObject::Decoration& decoration = mapObject.decorations[i];
 
-					pathAsString = texturePath.string();
-					std::transform(pathAsString.begin(), pathAsString.end(), pathAsString.begin(), ::tolower);
+						u32 decorationFileID = decoration.nameID;
+						if (decorationFileID == std::numeric_limits<u32>().max())
+							continue;
 
-					material.textureID[j] = StringUtils::fnv1a_32(pathAsString.c_str(), pathAsString.length());
+						const std::string& cascFilePath = cascLoader->GetFilePathFromListFileID(decorationFileID);
+						if (cascFilePath.size() == 0)
+						{
+							decoration.nameID = std::numeric_limits<u32>().max();
+							continue;
+						}
+
+						fs::path cmodelPath = cascFilePath;
+						cmodelPath.replace_extension("cmodel");
+
+						pathAsString = cmodelPath.string();
+						std::transform(pathAsString.begin(), pathAsString.end(), pathAsString.begin(), ::tolower);
+
+						decoration.nameID = StringUtils::fnv1a_32(pathAsString.c_str(), pathAsString.length());
+					}
 				}
 			}
 
-			// Convert Decoration FileIDs to PathHash
+			Model::ComplexModel complexModel;
+			if (!Model::ComplexModel::FromMapObject(mapObject, complexModel))
+				continue;
+
+			bool result = complexModel.Save(fileListEntry.path);
+			if (runtime->isInDebugMode)
 			{
-				for (u32 i = 0; i < mapObject.decorations.size(); i++)
+				if (result)
 				{
-					Model::MapObject::Decoration& decoration = mapObject.decorations[i];
+					DebugHandler::Print("[MapObject Extractor] Extracted {0}", fileListEntry.fileName);
+				}
+				else
+				{
+					DebugHandler::PrintWarning("[MapObject Extractor] Failed to extract {0}", fileListEntry.fileName);
+				}
+			}
 
-					u32 decorationFileID = decoration.nameID;
-					if (decorationFileID == std::numeric_limits<u32>().max())
-						continue;
+			{
+				std::scoped_lock scopedLock(printMutex);
 
-					const std::string& cascFilePath = cascLoader->GetFilePathFromListFileID(decorationFileID);
-					if (cascFilePath.size() == 0)
-					{
-						decoration.nameID = std::numeric_limits<u32>().max();
-						continue;
-					}
+				f32 processedFiles = static_cast<f32>(++numProcessedFiles);
+				f32 progress = (processedFiles / static_cast<f32>(numFiles - 1)) * 10.0f;
+				u32 bitToCheck = static_cast<u32>(progress);
+				u32 bitMask = 1 << bitToCheck;
 
-					fs::path cmodelPath = cascFilePath;
-					cmodelPath.replace_extension("cmodel");
-
-					pathAsString = cmodelPath.string();
-					std::transform(pathAsString.begin(), pathAsString.end(), pathAsString.begin(), ::tolower);
-
-					decoration.nameID = StringUtils::fnv1a_32(pathAsString.c_str(), pathAsString.length());
+				bool reportStatus = (progressFlags & bitMask) == 0;
+				if (reportStatus)
+				{
+					progressFlags |= bitMask;
+					DebugHandler::Print("[MapObject Extractor] Progress Status ({0:.0f}% / 100%)", progress * 10.0f);
 				}
 			}
 		}
+	});
 
-		bool result = mapObject.Save(fileListEntry.path);
-		if (runtime->isInDebugMode)
-		{
-			if (result)
-			{
-				DebugHandler::Print("[MapObject Extractor] Extracted {0}", fileListEntry.fileName);
-			}
-			else
-			{
-				DebugHandler::PrintWarning("[MapObject Extractor] Failed to extract {0}", fileListEntry.fileName);
-			}
-		}
-
-		f32 progress = (static_cast<f32>(i) / static_cast<f32>(numFiles - 1)) * 10.0f;
-		u32 bitToCheck = static_cast<u32>(progress);
-		u32 bitMask = 1 << bitToCheck;
-
-		bool reportStatus = (progressFlags & bitMask) == 0;
-		if (reportStatus)
-		{
-			progressFlags |= bitMask;
-			DebugHandler::Print("[MapObject Extractor] Progress Status ({0:.0f}% / 100%)", progress * 10.0f);
-		}
-	}
+	convertWMOTask.m_Priority = enki::TaskPriority::TASK_PRIORITY_HIGH;
+	runtime->scheduler.AddTaskSetToPipe(&convertWMOTask);
+	runtime->scheduler.WaitforTask(&convertWMOTask);
 }

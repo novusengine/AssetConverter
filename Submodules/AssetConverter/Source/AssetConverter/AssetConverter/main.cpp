@@ -43,13 +43,9 @@ i32 main()
 			fs::create_directories(paths.complexModel);
 		}
 
-		// Setup Scheduler
-		{
-			runtime->scheduler.Initialize();
-		}
 		// Setup Json
 		{
-			static const std::string CONFIG_VERSION = "0.2";
+			static const std::string CONFIG_VERSION = "0.3";
 			static const std::string CONFIG_NAME = "AssetConverterConfig.json";
 
 			nlohmann::ordered_json fallbackJson;
@@ -59,6 +55,7 @@ i32 main()
 				fallbackJson["General"] =
 				{
 					{ "Version",			CONFIG_VERSION },
+					{ "ThreadCount",		std::thread::hardware_concurrency() - 1 },
 					{ "DebugMode",			false }
 				};
 
@@ -104,16 +101,27 @@ i32 main()
 
 			if (!JsonUtils::LoadFromPathOrCreate(runtime->json, fallbackJson, configPath))
 			{
-				DebugHandler::PrintFatal("[Runtime] Failed to Load %s from %s", CONFIG_NAME, absolutePath.c_str());
+				DebugHandler::PrintFatal("[Runtime] Failed to Load {0} from {1}", CONFIG_NAME, absolutePath.c_str());
 			}
 
 			std::string currentVersion = runtime->json["General"]["Version"];
 			if (currentVersion != CONFIG_VERSION)
 			{
-				DebugHandler::PrintFatal("[Runtime] Attempted to load outdated %s. (Config Version : %s, Expected Version : %s)", CONFIG_NAME.c_str(), currentVersion.c_str(), CONFIG_VERSION.c_str());
+				DebugHandler::PrintFatal("[Runtime] Attempted to load outdated {0}. (Config Version : {1}, Expected Version : {2})", CONFIG_NAME.c_str(), currentVersion.c_str(), CONFIG_VERSION.c_str());
 			}
 
 			runtime->isInDebugMode = runtime->json["General"]["DebugMode"];
+		}
+
+		// Setup Scheduler
+		{
+			u32 threadCount = runtime->json["General"]["ThreadCount"];
+			if (threadCount == 0 || threadCount == std::numeric_limits<u32>().max())
+			{
+				threadCount = std::thread::hardware_concurrency() - 1;
+			}
+
+			runtime->scheduler.Initialize(threadCount);
 		}
 	}
 

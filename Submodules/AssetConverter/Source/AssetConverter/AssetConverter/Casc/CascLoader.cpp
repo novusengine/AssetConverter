@@ -128,13 +128,13 @@ std::shared_ptr<Bytebuffer> CascLoader::GetFilePartialByHandle(void* handle, u32
     if (fileSize == CASC_INVALID_SIZE)
         return nullptr;
 
-    size_t calculatedSize = glm::min(static_cast<u32>(fileSize), size);
+    u32 calculatedSize = glm::min(static_cast<u32>(fileSize), size);
     std::shared_ptr<Bytebuffer> buffer = Bytebuffer::BorrowRuntime(calculatedSize);
     if (!CascReadFile(handle, buffer->GetDataPointer(), calculatedSize, nullptr))
         return nullptr;
 
     CascCloseFile(handle);
 
-    buffer->writtenData = calculatedSize;
+    buffer->writtenData = static_cast<size_t>(calculatedSize);
     return buffer;
 }
