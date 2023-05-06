@@ -37,7 +37,7 @@ namespace BLP
 		}
 	}
 
-	void BlpConvert::ConvertBLP(unsigned char* inputBytes, std::size_t size, const std::string& outputPath, bool generateMipmaps, bool useCompression)
+	void BlpConvert::ConvertBLP(unsigned char* inputBytes, std::size_t size, const std::string& outputPath, bool generateMipmaps, bool useCompression, ivec2 overrideCompressionSize)
 	{
 		ByteStream stream(inputBytes, size);
 		BlpHeader header = stream.read<BlpHeader>();
@@ -60,40 +60,14 @@ namespace BLP
 		std::vector<uint32_t> imageData;
 		LoadFirstLayer(header, stream, imageData);
 
-		useCompression |= !useCompression && (header.width > 512 || header.height > 512);
+		bool enableHeightSizeCompressionOverride = overrideCompressionSize.x != -1;
+		bool enableWidthSizeCompressionOverride = overrideCompressionSize.y != -1;
+		bool enableCompression = useCompression || ((enableWidthSizeCompressionOverride && header.width >= overrideCompressionSize.x) || (enableHeightSizeCompressionOverride && header.height >= overrideCompressionSize.y));
 
-		if (useCompression)
+		// Use compression if specified or if the width/height is >= 256
+		if (enableCompression)
 		{
-			if (format == Format::BC1)
-			{
-				if (header.alphaDepth == 1)
-				{
-					textureFormat = cuttlefish::Texture::Format::BC1_RGBA;
-				}
-				else
-				{
-					textureFormat = cuttlefish::Texture::Format::BC1_RGB;
-				}
-			}
-			else if (format == Format::BC2)
-			{
-				textureFormat = cuttlefish::Texture::Format::BC2;
-			}
-			else if (format == Format::BC3)
-			{
-				textureFormat = cuttlefish::Texture::Format::BC3;
-			}
-			else
-			{
-				if (header.alphaDepth > 0)
-				{
-					textureFormat = cuttlefish::Texture::Format::BC3;
-				}
-				else
-				{
-					textureFormat = cuttlefish::Texture::Format::BC1_RGB;
-				}
-			}
+			textureFormat = cuttlefish::Texture::Format::BC3;
 		}
 		else
 		{
@@ -104,12 +78,12 @@ namespace BLP
 		if (!image.initialize(cuttlefish::Image::Format::RGBA8, header.width, header.height))
 			return;
 
-		for (uint32_t y = 0; y < header.height; y++)
+		for (u32 y = 0; y < header.height; y++)
 		{
 			void* scanLine = image.scanline(y);
-			int pixelDataOffset = (y * header.width);
+			i32 pixelDataOffset = (y * header.width);
 
-			memcpy(scanLine, &imageData[pixelDataOffset], header.width * sizeof(uint32_t));
+			memcpy(scanLine, &imageData[pixelDataOffset], header.width * sizeof(u32));
 		}
 
 		if (header.compression == 1)

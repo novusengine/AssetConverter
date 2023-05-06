@@ -7,7 +7,7 @@
 #include <Base/Util/StringUtils.h>
 
 #include <FileFormat/Novus/Model/ComplexModel.h>
-#include <FileFormat/Warcraft/Shared.h>
+#include <FileFormat/Shared.h>
 #include <FileFormat/Warcraft/M2/M2.h>
 #include <FileFormat/Warcraft/Parsers/M2Parser.h>
 

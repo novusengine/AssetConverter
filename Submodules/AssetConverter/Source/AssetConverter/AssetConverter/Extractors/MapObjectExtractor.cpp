@@ -8,7 +8,7 @@
 
 #include <FileFormat/Novus/Model/ComplexModel.h>
 #include <FileFormat/Novus/Model/MapObject.h>
-#include <FileFormat/Warcraft/Shared.h>
+#include <FileFormat/Shared.h>
 #include <FileFormat/Warcraft/WMO/Wmo.h>
 #include <FileFormat/Warcraft/Parsers/WmoParser.h>
 

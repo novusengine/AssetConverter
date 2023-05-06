@@ -26,7 +26,13 @@ void TextureExtractor::Process()
 		std::string fileName;
 		std::string path;
 
-		bool useCompression = true;
+		struct Flags
+		{
+			u8 isInterfaceFile : 1;
+			u8 useCompression : 1;
+		};
+
+		Flags flags;
 	};
 
 	std::vector<FileListEntry> fileList = { };
@@ -54,7 +60,8 @@ void TextureExtractor::Process()
 		fileListEntry.fileID = itr.second;
 		fileListEntry.fileName = outputPath.filename().string();
 		fileListEntry.path = outputPath.string();
-		fileListEntry.useCompression = !StringUtils::BeginsWith(pathStr, "interface");
+		fileListEntry.flags.isInterfaceFile = StringUtils::BeginsWith(pathStr, "interface");
+		fileListEntry.flags.useCompression = !fileListEntry.flags.isInterfaceFile;
 	}
 
 	BLP::BlpConvert blpConvert;
@@ -76,7 +83,9 @@ void TextureExtractor::Process()
 			if (!buffer)
 				return;
 
-			blpConvert.ConvertBLP(buffer->GetDataPointer(), buffer->writtenData, fileListEntry.path, true, fileListEntry.useCompression);
+			bool generateMips = !fileListEntry.flags.isInterfaceFile;
+			bool useCompression = fileListEntry.flags.useCompression;
+			blpConvert.ConvertBLP(buffer->GetDataPointer(), buffer->writtenData, fileListEntry.path, generateMips, useCompression, ivec2(256, 256));
 
 			f32 progress = (static_cast<f32>(numFilesConverted++) / static_cast<f32>(numFiles - 1)) * 10.0f;
 			u32 bitToCheck = static_cast<u32>(progress);
