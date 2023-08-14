@@ -14,9 +14,15 @@ public:
 
 private:
 	static bool ExtractMap();
+	static bool ExtractLiquidObject();
+	static bool ExtractLiquidType();
+	static bool ExtractLiquidMaterial();
 
 public:
 	static Client::ClientDB<Client::Definitions::Map> maps;
+	static Client::ClientDB<Client::Definitions::LiquidObject> liquidObjects;
+	static Client::ClientDB<Client::Definitions::LiquidType> liquidTypes;
+	static Client::ClientDB<Client::Definitions::LiquidMaterial> liquidMaterials;
 
 private:
 	struct ExtractionEntry

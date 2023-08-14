@@ -132,7 +132,12 @@ void MapExtractor::Process()
                         adt.chunkID = chunkID;
                     }
 
-                    if (!adtParser.TryParse(rootBuffer, textBuffer, objBuffer, wdt, adt))
+                    Adt::Parser::Context context = { };
+                    context.liquidObjects = &ClientDBExtractor::liquidObjects;
+                    context.liquidTypes = &ClientDBExtractor::liquidTypes;
+                    context.liquidMaterials = &ClientDBExtractor::liquidMaterials;
+
+                    if (!adtParser.TryParse(context, rootBuffer, textBuffer, objBuffer, wdt, adt))
                         continue;
 
                     Map::Chunk chunk = { };
