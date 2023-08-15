@@ -64,11 +64,24 @@ void CascListFile::ParseListFile()
 				if (!_fileBuffer->Get<char>(c))
 					return;
 
-				if (c == '\n')
+				if (c == '\r' || c == '\n')
+				{
 					break;
+                }
 			}
 
-			size_t pathEndIndex = _fileBuffer->readData - 1;
+			// Skip any \r or \n
+			while (_fileBuffer->GetActiveSize())
+			{
+				char currentData = *reinterpret_cast<char*>(_fileBuffer->GetReadPointer());
+				if (currentData == '\r' || currentData == '\n')
+				{
+                    _fileBuffer->SkipRead(1);
+                    break;
+                }
+			}
+
+			size_t pathEndIndex = _fileBuffer->readData - 2;
 			size_t strSize = pathEndIndex - pathStartIndex;
 			filePath = std::string(&buffer[pathStartIndex], strSize);
 		}
