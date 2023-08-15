@@ -57,6 +57,7 @@ void CascListFile::ParseListFile()
 		// Read fileID
 		{
 			size_t pathStartIndex = _fileBuffer->readData;
+			u8 numLineEndingSymbols = 0;
 
 			char c = 0;
 			for (size_t i = pathStartIndex; i < bufferSize; i++)
@@ -66,6 +67,7 @@ void CascListFile::ParseListFile()
 
 				if (c == '\r' || c == '\n')
 				{
+					numLineEndingSymbols++;
 					break;
                 }
 			}
@@ -76,12 +78,13 @@ void CascListFile::ParseListFile()
 				char currentData = *reinterpret_cast<char*>(_fileBuffer->GetReadPointer());
 				if (currentData == '\r' || currentData == '\n')
 				{
+					numLineEndingSymbols++;
                     _fileBuffer->SkipRead(1);
                     break;
                 }
 			}
 
-			size_t pathEndIndex = _fileBuffer->readData - 2;
+			size_t pathEndIndex = _fileBuffer->readData - numLineEndingSymbols;
 			size_t strSize = pathEndIndex - pathStartIndex;
 			filePath = std::string(&buffer[pathStartIndex], strSize);
 		}
