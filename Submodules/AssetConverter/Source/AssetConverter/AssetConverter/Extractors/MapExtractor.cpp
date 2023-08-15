@@ -33,7 +33,7 @@ void MapExtractor::Process()
     bool createChunkAlphaMaps = runtime->json["Extraction"]["Map"]["BlendMaps"];
 
     u32 numMapEntries = static_cast<u32>(maps.data.size());
-    DebugHandler::Print("[MapExtractor] Processing {0} maps", numMapEntries);
+    DebugHandler::Print("[Map Extractor] Processing {0} maps", numMapEntries);
 
     for (u32 i = 0; i < numMapEntries; i++)
     {
@@ -61,7 +61,7 @@ void MapExtractor::Process()
         Adt::Wdt wdt = { };
         if (!wdtParser.TryParse(fileWDT, wdt))
         {
-            DebugHandler::PrintWarning("[MapExtractor] Failed to extract {0} (Corrupt WDT)", mapInternalName);
+            DebugHandler::PrintWarning("[Map Extractor] Failed to extract {0} (Corrupt WDT)", mapInternalName);
             continue;
         }
 
