@@ -17,12 +17,16 @@ private:
 	static bool ExtractLiquidObject();
 	static bool ExtractLiquidType();
 	static bool ExtractLiquidMaterial();
+	static bool ExtractCinematicCamera();
+	static bool ExtractCinematicSequence();
 
 public:
 	static Client::ClientDB<Client::Definitions::Map> maps;
 	static Client::ClientDB<Client::Definitions::LiquidObject> liquidObjects;
 	static Client::ClientDB<Client::Definitions::LiquidType> liquidTypes;
 	static Client::ClientDB<Client::Definitions::LiquidMaterial> liquidMaterials;
+	static Client::ClientDB<Client::Definitions::CinematicCamera> cinematicCameras;
+	static Client::ClientDB<Client::Definitions::CinematicSequence> cinematicSequences;
 
 private:
 	struct ExtractionEntry

@@ -8,6 +8,7 @@
 #include <Base/Util/DebugHandler.h>
 #include <Base/Util/StringUtils.h>
 
+#include <FileFormat/Shared.h>
 #include <FileFormat/Warcraft/DB2/DB2Definitions.h>
 #include <FileFormat/Warcraft/DB2/Wdc3.h>
 #include <FileFormat/Warcraft/Parsers/Wdc3Parser.h>
@@ -22,13 +23,17 @@ std::vector<ClientDBExtractor::ExtractionEntry> ClientDBExtractor::_extractionEn
 	{ "Map.db2", "A collection of all maps", ClientDBExtractor::ExtractMap },
 	{ "LiquidObject.db2", "A collection of liquid objects", ClientDBExtractor::ExtractLiquidObject },
 	{ "LiquidType.db2", "A collection of liquid types", ClientDBExtractor::ExtractLiquidType },
-	{ "LiquidMaterial.db2", "A collection of liquid materials", ClientDBExtractor::ExtractLiquidMaterial }
+	{ "LiquidMaterial.db2", "A collection of liquid materials", ClientDBExtractor::ExtractLiquidMaterial },
+	{ "CinematicCamera.db2", "A collection of cinematic cameras", ClientDBExtractor::ExtractCinematicCamera },
+	{ "CinematicSequences.db2", "A collection of cinematic sequences", ClientDBExtractor::ExtractCinematicSequence }
 };
 
 Client::ClientDB<Client::Definitions::Map> ClientDBExtractor::maps;
 Client::ClientDB<Client::Definitions::LiquidObject> ClientDBExtractor::liquidObjects;
 Client::ClientDB<Client::Definitions::LiquidType> ClientDBExtractor::liquidTypes;
 Client::ClientDB<Client::Definitions::LiquidMaterial> ClientDBExtractor::liquidMaterials;
+Client::ClientDB<Client::Definitions::CinematicCamera> ClientDBExtractor::cinematicCameras;
+Client::ClientDB<Client::Definitions::CinematicSequence> ClientDBExtractor::cinematicSequences;
 
 void ClientDBExtractor::Process()
 {
@@ -51,11 +56,11 @@ void FixPathExtension(std::string& path)
 {
 	if (StringUtils::EndsWith(path, ".mdx"))
 	{
-		path = path.substr(0, path.length() - 4) + ".cmodel";
+		path = path.substr(0, path.length() - 4) + ".complexmodel";
 	}
 	else if (StringUtils::EndsWith(path, ".m2"))
 	{
-		path = path.substr(0, path.length() - 3) + ".cmodel";
+		path = path.substr(0, path.length() - 3) + ".complexmodel";
 	}
 	else if (StringUtils::EndsWith(path, ".blp"))
 	{
@@ -102,35 +107,8 @@ bool ClientDBExtractor::ExtractMap()
 
 	maps.data.clear();
 	maps.data.reserve(header.recordCount);
-
 	maps.stringTable.Clear();
 	maps.stringTable.Reserve(static_cast<u64>(header.recordCount) * 2);
-
-	/*
-		{ "Directory",					0,	32	},
-		{ "MapName_lang",				1,	32	},
-		{ "MapDescription0_lang",		2,	32	},
-		{ "MapDescription1_lang",		3,	32	},
-		{ "PvpShortDescription_lang",	4,	32	},
-		{ "PvpLongDescription_lang",	5,	32	},
-		{ "MapType",					6,	8	},
-		{ "InstanceType",				7,	8	},
-		{ "ExpansionID",				8,	8	},
-		{ "AreaTableID",				9,	16	},
-		{ "LoadingScreenID",			10, 16	},
-		{ "TimeOfDayOverride",			11, 16	},
-		{ "ParentMapID",				12, 16	},
-		{ "CosmeticParentMapID",		13, 16	},
-		{ "TimeOffset",					14, 8	},
-		{ "MinimapIconScale",			15, 32	},
-		{ "RaidOffset",					16, 32	},
-		{ "CorpseMapID",				17, 16	},
-		{ "MaxPlayers",					18, 8	},
-		{ "WindSettingsID",				19, 16	},
-		{ "ZmpFileDataID",				20, 32	},
-		{ "Flags",						21, 32	}
-	*/
-
 	maps.idToIndexMap.reserve(header.recordCount);
 
 	for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -200,17 +178,7 @@ bool ClientDBExtractor::ExtractLiquidObject()
 
 	liquidObjects.data.clear();
 	liquidObjects.data.reserve(header.recordCount);
-
 	liquidObjects.stringTable.Clear();
-
-	/*
-		{ "FlowDirection",	0,	32	},
-		{ "FlowSpeed",		1,	32	},
-		{ "LiquidTypeID",	2,	16	},
-		{ "Fishable",		3,	8	},
-		{ "Reflection",		4,	8	}
-	*/
-
 	liquidObjects.idToIndexMap.reserve(header.recordCount);
 
 	for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -265,68 +233,8 @@ bool ClientDBExtractor::ExtractLiquidType()
 
 	liquidTypes.data.clear();
 	liquidTypes.data.reserve(header.recordCount);
-
 	liquidTypes.stringTable.Clear();
 	liquidTypes.stringTable.Reserve(header.recordCount * 7);
-
-	/*
-		{ "Name,					0,	32	}
-		{ "Texture0,				1,	32	}
-		{ "Texture1,				2,	32	}
-		{ "Texture2,				3,	32	}
-		{ "Texture3,				4,	32	}
-		{ "Texture4,				5,	32	}
-		{ "Texture5,				6,	32	}
-		{ "Flags<u16>,				7,	16	}
-		{ "SoundBank<u8>,			8,	8	}
-		{ "SoundID<u32>,			9,	32	}
-		{ "SpellID<u32>,			10,	32	}
-		{ "MaxDarkenDepth,			11,	32	}
-		{ "FogDarkenIntensity,		12,	32	}
-		{ "AmbDarkenIntensity,		13,	32	}
-		{ "DirDarkenIntensity,		14,	32	}
-		{ "LightID<u16>,			15,	16	}
-		{ "ParticleScale,			16,	32	}
-		{ "ParticleMovement<u8>,	17,	8	}
-		{ "ParticleTexSlots<u8>,	18,	8	}
-		{ "MaterialID<u8>,			19,	8	}
-		{ "MinimapStaticCol<32>,	20,	32	},
-		{ "FrameCountTexture0,		21,	32	},
-		{ "FrameCountTexture1,		22,	32	},
-		{ "FrameCountTexture2,		23,	32	},
-		{ "FrameCountTexture3,		24,	32	},
-		{ "FrameCountTexture4,		25,	32	},
-		{ "FrameCountTexture5,		26,	32	},
-		{ "Color0<32>,				27,	32	},
-		{ "Color1<32>,				28,	32	},
-		{ "UnkFloat0,					29,	32	},
-		{ "UnkFloat1,					30,	32	},
-		{ "UnkFloat2,					31,	32	},
-		{ "UnkFloat3,					32,	32	},
-		{ "UnkFloat4,					33,	32	},
-		{ "UnkFloat5,					34,	32	},
-		{ "UnkFloat6,					35,	32	},
-		{ "UnkFloat7,					36,	32	},
-		{ "UnkFloat8,					37,	32	},
-		{ "UnkFloat9,					38,	32	},
-		{ "UnkFloat10,					39,	32	},
-		{ "UnkFloat11,					40,	32	},
-		{ "UnkFloat12,					41,	32	},
-		{ "UnkFloat13,					42,	32	},
-		{ "UnkFloat14,					43,	32	},
-		{ "UnkFloat15,					44,	32	},
-		{ "UnkFloat16,					45,	32	},
-		{ "UnkFloat17,					46,	32	},
-		{ "UnkInt0,					47,	32	},
-		{ "UnkInt1,					48,	32	},
-		{ "UnkInt2,					49,	32	},
-		{ "UnkInt3,					50,	32	},
-		{ "Coefficient0,			51,	32	},
-		{ "Coefficient1,			52,	32	},
-		{ "Coefficient2,			53,	32	},
-		{ "Coefficient3,			54,	32	}
-	*/
-
 	liquidTypes.idToIndexMap.reserve(header.recordCount);
 
 	for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -415,14 +323,7 @@ bool ClientDBExtractor::ExtractLiquidMaterial()
 
 	liquidMaterials.data.clear();
 	liquidMaterials.data.reserve(header.recordCount);
-
 	liquidMaterials.stringTable.Clear();
-
-	/*
-		{ "Flags",				0,	8	},
-		{ "LiquidVertexFormat",	1,	8	}
-	*/
-
 	liquidMaterials.idToIndexMap.reserve(header.recordCount);
 
 	for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -452,6 +353,131 @@ bool ClientDBExtractor::ExtractLiquidMaterial()
 	FileWriter fileWriter(path, resultBuffer);
 
 	if (!liquidMaterials.Write(resultBuffer))
+		return false;
+
+	if (!fileWriter.Write())
+		return false;
+
+	return true;
+}
+
+bool ClientDBExtractor::ExtractCinematicCamera()
+{
+	CascLoader* cascLoader = ServiceLocator::GetCascLoader();
+
+	DB2::WDC3::Layout layout = { };
+	DB2::WDC3::Parser db2Parser = { };
+
+	std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByListFilePath("dbfilesclient/cinematiccamera.db2");
+	if (!buffer || !db2Parser.TryParse(buffer, layout))
+		return false;
+
+	const DB2::WDC3::Layout::Header& header = layout.header;
+
+	cinematicCameras.data.clear();
+	cinematicCameras.data.reserve(header.recordCount);
+	cinematicCameras.stringTable.Clear();
+	cinematicCameras.idToIndexMap.reserve(header.recordCount);
+
+	for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
+	{
+		u32 sectionID = 0;
+		u32 recordID = 0;
+		u8* recordData = nullptr;
+
+		if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
+			continue;
+
+		DB::Client::Definitions::CinematicCamera& cinematicCamera = cinematicCameras.data.emplace_back();
+
+		cinematicCamera.id = db2Parser.GetRecordIDFromIndex(layout, db2RecordIndex);
+		cinematicCamera.endPosition = CoordinateSpaces::CinematicCameraPosToNovus(*db2Parser.GetField<vec3>(layout, sectionID, recordID, recordData, 0));
+		cinematicCamera.soundID = *db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1);
+		cinematicCamera.rotation = *db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 2);
+		cinematicCamera.cameraPath = *db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 3);
+
+		u32 fileID = cinematicCamera.cameraPath;
+		if (cascLoader->FileExistsInCasc(fileID))
+		{
+			const std::string& fileStr = cascLoader->GetFilePathFromListFileID(cinematicCamera.cameraPath);
+
+			fs::path filePath = fs::path(fileStr).replace_extension(".complexmodel");
+			u32 nameHash = StringUtils::fnv1a_32(filePath.string().c_str(), filePath.string().size());
+
+			cinematicCamera.cameraPath = nameHash;
+		}
+		else
+		{
+			cinematicCamera.cameraPath = std::numeric_limits<u32>::max();
+		}
+
+		cinematicCameras.idToIndexMap[cinematicCamera.id] = static_cast<u32>(cinematicCameras.data.size()) - 1u;
+	}
+
+	db2Parser.RepopulateFromCopyTable(layout, liquidObjects.data, cinematicCameras.idToIndexMap);
+
+	size_t size = cinematicCameras.GetSerializedSize();
+	std::shared_ptr<Bytebuffer> resultBuffer = Bytebuffer::BorrowRuntime(size);
+
+	fs::path path = ServiceLocator::GetRuntime()->paths.clientDB / "CinematicCamera.cdb";
+	FileWriter fileWriter(path, resultBuffer);
+
+	if (!cinematicCameras.Write(resultBuffer))
+		return false;
+
+	if (!fileWriter.Write())
+		return false;
+
+	return true;
+}
+
+bool ClientDBExtractor::ExtractCinematicSequence()
+{
+	CascLoader* cascLoader = ServiceLocator::GetCascLoader();
+
+	DB2::WDC3::Layout layout = { };
+	DB2::WDC3::Parser db2Parser = { };
+
+	std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByListFilePath("dbfilesclient/cinematicsequences.db2");
+	if (!buffer || !db2Parser.TryParse(buffer, layout))
+		return false;
+
+	const DB2::WDC3::Layout::Header& header = layout.header;
+
+	cinematicSequences.data.clear();
+	cinematicSequences.data.reserve(header.recordCount);
+	cinematicSequences.stringTable.Clear();
+	cinematicSequences.idToIndexMap.reserve(header.recordCount);
+
+	for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
+	{
+		u32 sectionID = 0;
+		u32 recordID = 0;
+		u8* recordData = nullptr;
+
+		if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
+			continue;
+
+		DB::Client::Definitions::CinematicSequence& cinematicSequence = cinematicSequences.data.emplace_back();
+
+		cinematicSequence.id = db2Parser.GetRecordIDFromIndex(layout, db2RecordIndex);
+		cinematicSequence.soundID = *db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
+
+		const u16* cameraIDs = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 1);
+		memcpy(&cinematicSequence.cameraIDs[0], cameraIDs, 8 * sizeof(u16));
+
+		cinematicSequences.idToIndexMap[cinematicSequence.id] = static_cast<u32>(cinematicSequences.data.size()) - 1u;
+	}
+
+	db2Parser.RepopulateFromCopyTable(layout, liquidObjects.data, cinematicSequences.idToIndexMap);
+
+	size_t size = cinematicSequences.GetSerializedSize();
+	std::shared_ptr<Bytebuffer> resultBuffer = Bytebuffer::BorrowRuntime(size);
+
+	fs::path path = ServiceLocator::GetRuntime()->paths.clientDB / "CinematicSequences.cdb";
+	FileWriter fileWriter(path, resultBuffer);
+
+	if (!cinematicSequences.Write(resultBuffer))
 		return false;
 
 	if (!fileWriter.Write())
