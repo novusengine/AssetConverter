@@ -79,6 +79,13 @@ void MapExtractor::Process()
             if (!placementInfo.flags.EntryIsFiledataID || placementInfo.fileID == 0)
                 continue;
 
+            // Skip map if placement file doesn't exist
+            if (!cascLoader->FileExistsInCasc(placementInfo.fileID))
+            {
+                DebugHandler::PrintError("Skipped map {0} because placement file doesn't exist", mapInternalName);
+                continue;
+            }
+
             Terrain::Placement& placement = layout.placement;
             {
                 placement.uniqueID = placementInfo.uniqueID;
@@ -154,6 +161,12 @@ void MapExtractor::Process()
                                 placementInfo.nameHash == std::numeric_limits<u32>().max())
                                 continue;
 
+                            if (!cascLoader->FileExistsInCasc(placementInfo.nameHash))
+                            {
+                                DebugHandler::PrintError("Skipped map object placement because file doesn't exist");
+                                continue;
+                            }
+
                             const std::string& wmoPathStr = cascLoader->GetFilePathFromListFileID(placementInfo.nameHash);
                             fs::path wmoPath = fs::path(wmoPathStr).replace_extension(".complexmodel");
 
@@ -168,6 +181,12 @@ void MapExtractor::Process()
                             if (placementInfo.nameHash == 0 ||
                                 placementInfo.nameHash == std::numeric_limits<u32>().max())
                                 continue;
+
+                            if (!cascLoader->FileExistsInCasc(placementInfo.nameHash))
+                            {
+                                DebugHandler::PrintError("Skipped complex model placement because file doesn't exist");
+                                continue;
+                            }
 
                             const std::string& m2PathStr = cascLoader->GetFilePathFromListFileID(placementInfo.nameHash);
                             fs::path m2Path = fs::path(m2PathStr).replace_extension(".complexmodel");
