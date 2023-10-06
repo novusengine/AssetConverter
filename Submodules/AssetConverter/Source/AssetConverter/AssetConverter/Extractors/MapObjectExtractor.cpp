@@ -157,7 +157,7 @@ void MapObjectExtractor::Process()
 						}
 
 						fs::path cmodelPath = cascFilePath;
-						cmodelPath.replace_extension("cmodel");
+						cmodelPath.replace_extension("complexmodel");
 
 						pathAsString = cmodelPath.string();
 						std::transform(pathAsString.begin(), pathAsString.end(), pathAsString.begin(), ::tolower);
