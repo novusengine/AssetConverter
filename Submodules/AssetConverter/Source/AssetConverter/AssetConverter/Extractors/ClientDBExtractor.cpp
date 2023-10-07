@@ -69,7 +69,7 @@ void FixPathExtension(std::string& path)
 	}
 }
 
-u32 GetStringIndexFromRecordIndex(DB2::WDC3::Layout& layout, DB2::WDC3::Parser& db2Parser, u32 recordIndex, u32 fieldIndex, StringTable& stringTable)
+u32 GetStringIndexFromRecordIndex(DB2::WDC3::Layout& layout, DB2::WDC3::Parser& db2Parser, u32 recordIndex, u32 fieldIndex, Novus::Container::StringTable& stringTable)
 {
 	std::string value = db2Parser.GetString(layout, recordIndex, fieldIndex);
 
@@ -80,7 +80,7 @@ u32 GetStringIndexFromRecordIndex(DB2::WDC3::Layout& layout, DB2::WDC3::Parser& 
 
 	return stringTable.AddString(value);
 }
-u32 GetStringIndexFromArrRecordIndex(DB2::WDC3::Layout& layout, DB2::WDC3::Parser& db2Parser, u32 recordIndex, u32 fieldIndex, u32 arrIndex, StringTable& stringTable)
+u32 GetStringIndexFromArrRecordIndex(DB2::WDC3::Layout& layout, DB2::WDC3::Parser& db2Parser, u32 recordIndex, u32 fieldIndex, u32 arrIndex, Novus::Container::StringTable& stringTable)
 {
 	std::string value = db2Parser.GetStringInArr(layout, recordIndex, fieldIndex, arrIndex);
 

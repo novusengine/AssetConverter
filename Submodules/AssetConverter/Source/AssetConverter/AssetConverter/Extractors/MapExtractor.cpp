@@ -28,7 +28,7 @@ void MapExtractor::Process()
     CascLoader* cascLoader = ServiceLocator::GetCascLoader();
 
     Client::ClientDB<Client::Definitions::Map>& maps = ClientDBExtractor::maps;
-    StringTable& stringTable = maps.stringTable;
+    Novus::Container::StringTable& stringTable = maps.stringTable;
 
     bool createChunkAlphaMaps = runtime->json["Extraction"]["Map"]["BlendMaps"];
 
