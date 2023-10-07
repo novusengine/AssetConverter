@@ -9,6 +9,48 @@ namespace fs = std::filesystem;
 
 bool CascLoader::_isLoadingIndexFiles = false;
 
+u32 GetLocaleFromString(const std::string& locale)
+{
+    u32 result = CASC_LOCALE_NONE;
+
+    if (locale == "all")
+        result = CASC_LOCALE_ALL;
+    else if (locale == "all_wow")
+        result = CASC_LOCALE_ALL_WOW;
+    else if (locale == "enus")
+        result = CASC_LOCALE_ENUS;
+    else if (locale == "kokr")
+        result = CASC_LOCALE_KOKR;
+    else if (locale == "frfr")
+        result = CASC_LOCALE_FRFR;
+    else if (locale == "dede")
+        result = CASC_LOCALE_DEDE;
+    else if (locale == "zhcn")
+        result = CASC_LOCALE_ZHCN;
+    else if (locale == "eses")
+        result = CASC_LOCALE_ESES;
+    else if (locale == "zhtw")
+        result = CASC_LOCALE_ZHTW;
+    else if (locale == "engb")
+        result = CASC_LOCALE_ENGB;
+    else if (locale == "encn")
+        result = CASC_LOCALE_ENCN;
+    else if (locale == "entw")
+        result = CASC_LOCALE_ENTW;
+    else if (locale == "esmx")
+        result = CASC_LOCALE_ESMX;
+    else if (locale == "ruru")
+        result = CASC_LOCALE_RURU;
+    else if (locale == "ptbr")
+        result = CASC_LOCALE_PTBR;
+    else if (locale == "itit")
+        result = CASC_LOCALE_ITIT;
+    else if (locale == "ptpt")
+        result = CASC_LOCALE_PTPT;
+
+    return result;
+}
+
 CascLoader::Result CascLoader::Load()
 {
     if (_storageHandle)
@@ -17,18 +59,25 @@ CascLoader::Result CascLoader::Load()
     fs::path currentPath = fs::current_path();
     std::string pathString = currentPath.string();
 
+    std::transform(_locale.cbegin(), _locale.cend(), _locale.begin(), [](unsigned char c) { return std::tolower(c); });
+    u32 locale = GetLocaleFromString(_locale);
+
+    if (_locale.empty() || locale == CASC_LOCALE_NONE)
+        return Result::MissingLocale;
+
     CASC_OPEN_STORAGE_ARGS args = { };
     args.Size = sizeof(CASC_OPEN_STORAGE_ARGS);
     args.szLocalPath = pathString.c_str();
     args.szCodeName = "wow_classic";
     args.szRegion = "eu";
-    args.dwLocaleMask = CASC_LOCALE_ENUS;
+    args.dwLocaleMask = locale;
     args.PfnProgressCallback = LoadingCallback;
 
     if (!CascOpenStorageEx(nullptr, &args, false, &_storageHandle))
         return Result::MissingCasc;
 
     DebugHandler::Print("[CascLoader] : Loading ListFile");
+
     if (!_listFile.Initialize())
         return Result::MissingListFile;
 

@@ -45,12 +45,15 @@ i32 main()
 
 		// Setup Json
 		{
-			static const std::string CONFIG_VERSION = "0.3";
+			static const std::string CONFIG_VERSION = "0.4";
 			static const std::string CONFIG_NAME = "AssetConverterConfig.json";
+
+			fs::path configPath = runtime->paths.executable / CONFIG_NAME;
+			std::string absolutePath = fs::absolute(configPath).string();
 
 			nlohmann::ordered_json fallbackJson;
 
-			// Create Default
+			// Setup Default
 			{
 				fallbackJson["General"] =
 				{
@@ -61,12 +64,14 @@ i32 main()
 
 				fallbackJson["Casc"] =
 				{
+					{ "Locale",				"enGB" },
 					{ "ListFile",			"listfile.csv" }
 				};
 
 				fallbackJson["Extraction"] =
 				{
 					{ "Enabled",			true },
+
 					{ "ClientDB",
 						{
 							{ "Enabled",	true }
@@ -96,8 +101,7 @@ i32 main()
 				};
 			}
 
-			fs::path configPath = runtime->paths.executable / CONFIG_NAME;
-			std::string absolutePath = fs::absolute(configPath).string();
+			bool configExists = fs::exists(configPath);
 
 			if (!JsonUtils::LoadFromPathOrCreate(runtime->json, fallbackJson, configPath))
 			{
@@ -111,6 +115,12 @@ i32 main()
 			}
 
 			runtime->isInDebugMode = runtime->json["General"]["DebugMode"];
+
+			if (!configExists)
+			{
+				DebugHandler::Print("[Runtime] This appears to be the first time you are running the asset converter. A config file have been created named 'AssetConverterConfig.json'.\nYou may want to go through the configuration file and set it up before running.\n\nPress any key if you wish to continue.");
+				std::cin.get();
+			}
 		}
 
 		// Setup Scheduler
@@ -127,8 +137,10 @@ i32 main()
 
 	// Setup CascLoader
 	{
-		std::string listFile = runtime->json["Casc"]["ListFile"];
-		ServiceLocator::SetCascLoader(new CascLoader(listFile));
+		const std::string& listFile = runtime->json["Casc"]["ListFile"];
+		const std::string& locale = runtime->json["Casc"]["Locale"];
+
+		ServiceLocator::SetCascLoader(new CascLoader(listFile, locale));
 	}
 
 	// Run Extractors
@@ -206,6 +218,12 @@ i32 main()
 			case CascLoader::Result::MissingListFile:
 			{
 				DebugHandler::PrintError("[CascLoader] Could not load Casc. Failed to find Listfile");
+				break;
+			}
+
+			case CascLoader::Result::MissingLocale:
+			{
+				DebugHandler::PrintError("[CascLoader] Could not load Casc. Invalid Locale");
 				break;
 			}
 

@@ -14,11 +14,12 @@ public:
 		Success,
 		AlreadyInitialized,
 		MissingCasc,
-		MissingListFile
+		MissingListFile,
+		MissingLocale
 	};
 
 public:
-	CascLoader(std::string listPath) : _listFile(listPath) { }
+	CascLoader(const std::string& listPath, const std::string& locale) : _listFile(listPath), _locale(locale) { }
 	~CascLoader() { }
 
 	CascLoader::Result Load();
@@ -55,5 +56,6 @@ private:
 private:
 	void* _storageHandle = nullptr;
 	CascListFile _listFile;
+	std::string _locale;
 	static bool _isLoadingIndexFiles;
 };
