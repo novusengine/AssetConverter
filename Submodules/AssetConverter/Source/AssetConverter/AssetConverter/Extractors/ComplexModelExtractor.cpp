@@ -96,6 +96,9 @@ void ComplexModelExtractor::Process()
 					if (fileID == 0 || fileID == std::numeric_limits<u32>().max())
 						continue;
 
+					if (!cascLoader->ListFileContainsID(fileID))
+						continue;
+
 					const std::string& cascFilePath = cascLoader->GetFilePathFromListFileID(fileID);
 					if (cascFilePath.size() == 0)
 						continue;

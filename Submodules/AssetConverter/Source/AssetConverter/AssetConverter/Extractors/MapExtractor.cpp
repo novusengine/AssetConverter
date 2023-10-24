@@ -90,17 +90,18 @@ void MapExtractor::Process()
             {
                 placement.uniqueID = placementInfo.uniqueID;
                 placement.nameHash = placementInfo.fileID;
-                placement.position = vec3(placementInfo.position.z, placementInfo.position.x, placementInfo.position.y);
+                placement.position = CoordinateSpaces::PlacementPosToNovus(placementInfo.position);
 
-                vec3 placementRotation = glm::radians(vec3(placementInfo.rotation.z, placementInfo.rotation.x, placementInfo.rotation.y + 180.f));
-                glm::mat4 matrix = glm::eulerAngleZYX(placementRotation.z, placementRotation.y, placementRotation.x);
+                vec3 placementRotation = glm::radians(CoordinateSpaces::PlacementRotToNovus(placementInfo.rotation));
+                glm::mat4 matrix = glm::eulerAngleYXZ(placementRotation.y, placementRotation.x, placementRotation.z);
                 placement.rotation = glm::quat_cast(matrix);
 
                 bool hasScale = placementInfo.flags.HasScale;
-                placement.scale = (placementInfo.scale * hasScale) + (1 * !hasScale);
+                placement.scale = (placementInfo.scale * hasScale) + (1024 * !hasScale);
             }
 
-            fs::path wmoPath = fs::path(cascLoader->GetFilePathFromListFileID(placement.nameHash)).replace_extension(".mapobject");
+            const std::string& filePath = cascLoader->GetFilePathFromListFileID(placement.nameHash);
+            fs::path wmoPath = fs::path(filePath).replace_extension(".complexmodel");
 
             u32 nameHash = StringUtils::fnv1a_32(wmoPath.string().c_str(), wmoPath.string().size());
             placement.nameHash = nameHash;

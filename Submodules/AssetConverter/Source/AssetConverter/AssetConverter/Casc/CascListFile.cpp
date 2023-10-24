@@ -30,6 +30,13 @@ void CascListFile::ParseListFile()
 	char* buffer = reinterpret_cast<char*>(_fileBuffer->GetDataPointer());
 	size_t bufferSize = _fileBuffer->size;
 
+	_fileIDToPath.reserve(2000000);
+	_filePathToID.reserve(2000000);
+
+	_m2Files.reserve(65535);
+	_wmoFiles.reserve(32768);
+	_blpFiles.reserve(262144);
+
 	while (_fileBuffer->GetReadSpace())
 	{
 		u32 fileID = 0;
@@ -43,7 +50,7 @@ void CascListFile::ParseListFile()
 			for (size_t i = numberStartIndex; i < bufferSize; i++)
 			{
 				if (!_fileBuffer->Get<char>(c))
-					return;
+					break;
 
 				if (c == ';')
 					break;
@@ -54,7 +61,7 @@ void CascListFile::ParseListFile()
 			fileID = std::stoi(numberStr);
 		}
 
-		// Read fileID
+		// Read filePath
 		{
 			size_t pathStartIndex = _fileBuffer->readData;
 			u8 numLineEndingSymbols = 0;
@@ -63,7 +70,7 @@ void CascListFile::ParseListFile()
 			for (size_t i = pathStartIndex; i < bufferSize; i++)
 			{
 				if (!_fileBuffer->Get<char>(c))
-					return;
+					break;
 
 				if (c == '\r' || c == '\n')
 				{
@@ -73,15 +80,11 @@ void CascListFile::ParseListFile()
 			}
 
 			// Skip any \r or \n
-			while (_fileBuffer->GetActiveSize())
+			char currentData = *reinterpret_cast<char*>(_fileBuffer->GetReadPointer());
+			if (currentData == '\r' || currentData == '\n')
 			{
-				char currentData = *reinterpret_cast<char*>(_fileBuffer->GetReadPointer());
-				if (currentData == '\r' || currentData == '\n')
-				{
-					numLineEndingSymbols++;
-                    _fileBuffer->SkipRead(1);
-                    break;
-                }
+				numLineEndingSymbols++;
+				_fileBuffer->SkipRead(1);
 			}
 
 			size_t pathEndIndex = _fileBuffer->readData - numLineEndingSymbols;
@@ -91,5 +94,18 @@ void CascListFile::ParseListFile()
 
 		_fileIDToPath[fileID] = filePath;
 		_filePathToID[filePath] = fileID;
+
+		if (StringUtils::EndsWith(filePath, ".m2"))
+		{
+			_m2Files.push_back(fileID);
+		}
+		else if (StringUtils::EndsWith(filePath, ".wmo"))
+		{
+			_wmoFiles.push_back(fileID);
+		}
+		else if (StringUtils::EndsWith(filePath, ".blp"))
+		{
+			_blpFiles.push_back(fileID);
+		}
 	}
 }

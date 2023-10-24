@@ -81,6 +81,9 @@ CascLoader::Result CascLoader::Load()
     if (!_listFile.Initialize())
         return Result::MissingListFile;
 
+    u32 numFileEntries = _listFile.GetNumEntries();
+    DebugHandler::Print("[CascLoader] : Loaded ListFile with {0} entries", numFileEntries);
+
     return Result::Success;
 }
 

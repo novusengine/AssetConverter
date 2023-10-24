@@ -3,6 +3,7 @@
 #include "AssetConverter/Casc/CascLoader.h"
 #include "AssetConverter/Util/ServiceLocator.h"
 
+#include <Base/Container/ConcurrentQueue.h>
 #include <Base/Util/DebugHandler.h>
 #include <Base/Util/StringUtils.h>
 
@@ -21,67 +22,79 @@ void MapObjectExtractor::Process()
 	CascLoader* cascLoader = ServiceLocator::GetCascLoader();
 
 	const CascListFile& listFile = cascLoader->GetListFile();
-	const robin_hood::unordered_map<std::string, u32>& filePathToIDMap = listFile.GetFilePathToIDMap();
+	const std::vector<u32>& wmoFileIDs = listFile.GetWMOFileIDs();
 
 	struct FileListEntry
 	{
+	public:
 		u32 fileID = 0;
 		std::string fileName;
 		std::string path;
 	};
 
-	std::vector<FileListEntry> fileList = { };
-	fileList.reserve(filePathToIDMap.size());
+	u32 numFiles = static_cast<u32>(wmoFileIDs.size());
+	moodycamel::ConcurrentQueue<FileListEntry> fileListQueue(numFiles);
 
-	for (auto& itr : filePathToIDMap)
+	enki::TaskSet processWMOList(numFiles, [&runtime, &cascLoader, &fileListQueue, &wmoFileIDs](enki::TaskSetPartition range, uint32_t threadNum)
 	{
-		if (!StringUtils::EndsWith(itr.first, ".wmo"))
-			continue;
-
-		// Determine if the wmo is a root file
+		for (u32 index = range.start; index < range.end; index++)
 		{
-			u32 bytesToSkip = sizeof(u32) + sizeof(u32) + sizeof(MVER);
-			u32 bytesToRead = bytesToSkip + sizeof(u32);
+			u32 wmoFileID = wmoFileIDs[index];
 
-			std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFilePartialByID(itr.second, bytesToRead);
-			if (buffer == nullptr)
-				continue;
+			// Determine if the wmo is a root file
+			{
+				u32 bytesToSkip = sizeof(u32) + sizeof(u32) + sizeof(MVER);
+				u32 bytesToRead = bytesToSkip + sizeof(u32);
 
-			buffer->SkipRead(bytesToSkip);
+				std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFilePartialByID(wmoFileID, bytesToRead);
+				if (buffer == nullptr)
+					continue;
 
-			u32 chunkToken = 0;
-			if (!buffer->GetU32(chunkToken))
-				continue;
+				buffer->SkipRead(bytesToSkip);
 
-			if (chunkToken != 'MOHD')
-				continue;
+				u32 chunkToken = 0;
+				if (!buffer->GetU32(chunkToken))
+					continue;
+
+				if (chunkToken != 'MOHD')
+					continue;
+			}
+
+			std::string pathStr = cascLoader->GetFilePathFromListFileID(wmoFileID);
+			std::transform(pathStr.begin(), pathStr.end(), pathStr.begin(), ::tolower);
+
+			fs::path outputPath = (runtime->paths.complexModel / pathStr).replace_extension("complexmodel");
+			fs::create_directories(outputPath.parent_path());
+
+			FileListEntry fileListEntry;
+			fileListEntry.fileID = wmoFileID;
+			fileListEntry.fileName = outputPath.filename().string();
+			fileListEntry.path = outputPath.string();
+
+			fileListQueue.enqueue(fileListEntry);
 		}
+	});
 
-		std::string pathStr = itr.first;
-		std::transform(pathStr.begin(), pathStr.end(), pathStr.begin(), ::tolower);
-
-		fs::path outputPath = (runtime->paths.complexModel / pathStr).replace_extension("complexmodel");
-		fs::create_directories(outputPath.parent_path());
-
-		FileListEntry& fileListEntry = fileList.emplace_back();
-		fileListEntry.fileID = itr.second;
-		fileListEntry.fileName = outputPath.filename().string();
-		fileListEntry.path = outputPath.string();
-	}
-
-	u32 numFiles = static_cast<u32>(fileList.size());
+	runtime->scheduler.AddTaskSetToPipe(&processWMOList);
+	runtime->scheduler.WaitforTask(&processWMOList);
 
 	std::mutex printMutex;
 	u32 numProcessedFiles = 0;
 	u16 progressFlags = 0;
-	DebugHandler::Print("[MapObject Extractor] Processing {0} files", numFiles);
 
-	enki::TaskSet convertWMOTask(numFiles, [&runtime, &cascLoader, &fileList, &numProcessedFiles, &progressFlags, &printMutex, numFiles](enki::TaskSetPartition range, uint32_t threadNum)
+	u32 numRootFiles = static_cast<u32>(fileListQueue.size_approx());
+	DebugHandler::Print("[MapObject Extractor] Processing {0} files", numRootFiles);
+
+	enki::TaskSet convertWMOTask(numRootFiles, [&runtime, &cascLoader, &fileListQueue, &numProcessedFiles, &progressFlags, &printMutex, numRootFiles](enki::TaskSetPartition range, uint32_t threadNum)
 	{
 		Wmo::Parser wmoParser = { };
 		for (u32 index = range.start; index < range.end; index++)
 		{
-			const FileListEntry& fileListEntry = fileList[index];
+			FileListEntry fileListEntry;
+			if (!fileListQueue.try_dequeue(fileListEntry))
+			{
+				continue;
+			}
 
 			Wmo::Layout wmo = { };
 			std::shared_ptr<Bytebuffer> rootBuffer = cascLoader->GetFileByID(fileListEntry.fileID);
@@ -188,7 +201,7 @@ void MapObjectExtractor::Process()
 				std::scoped_lock scopedLock(printMutex);
 
 				f32 processedFiles = static_cast<f32>(++numProcessedFiles);
-				f32 progress = (processedFiles / static_cast<f32>(numFiles - 1)) * 10.0f;
+				f32 progress = (processedFiles / static_cast<f32>(numRootFiles - 1)) * 10.0f;
 				u32 bitToCheck = static_cast<u32>(progress);
 				u32 bitMask = 1 << bitToCheck;
 
