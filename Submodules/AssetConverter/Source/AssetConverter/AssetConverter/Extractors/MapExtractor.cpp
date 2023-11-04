@@ -22,23 +22,23 @@
 
 #include <string_view>
 
+using namespace ClientDB;
+
 void MapExtractor::Process()
 {
     Runtime* runtime = ServiceLocator::GetRuntime();
     CascLoader* cascLoader = ServiceLocator::GetCascLoader();
 
-    Client::ClientDB<Client::Definitions::Map>& maps = ClientDBExtractor::maps;
-    Novus::Container::StringTable& stringTable = maps.stringTable;
+    Storage<Definitions::Map>& maps = ClientDBExtractor::GetMapStorage();
 
     bool createChunkAlphaMaps = runtime->json["Extraction"]["Map"]["BlendMaps"];
 
-    u32 numMapEntries = static_cast<u32>(maps.data.size());
+    u32 numMapEntries = maps.Count();
     DebugHandler::Print("[Map Extractor] Processing {0} maps", numMapEntries);
 
-    for (u32 i = 0; i < numMapEntries; i++)
+    for (const Definitions::Map& map : maps)
     {
-        const Client::Definitions::Map& map = maps.data[i];
-        const std::string& mapInternalName = stringTable.GetString(map.internalName);
+        const std::string& mapInternalName = maps.GetString(map.internalName);
 
         static char formatBuffer[512] = { 0 };
         i32 length = StringUtils::FormatString(&formatBuffer[0], 512, "world/maps/%s/%s.wdt", mapInternalName.c_str(), mapInternalName.c_str());
@@ -136,14 +136,14 @@ void MapExtractor::Process()
 
                     Adt::Layout adt = { };
                     {
-                        adt.mapID = map.id;
+                        adt.mapID = map.GetID();
                         adt.chunkID = chunkID;
                     }
 
                     Adt::Parser::Context context = { };
-                    context.liquidObjects = &ClientDBExtractor::liquidObjects;
-                    context.liquidTypes = &ClientDBExtractor::liquidTypes;
-                    context.liquidMaterials = &ClientDBExtractor::liquidMaterials;
+                    context.liquidObjects   = &ClientDBExtractor::GetLiquidObjectStorage();
+                    context.liquidTypes     = &ClientDBExtractor::GetLiquidTypeStorage();
+                    context.liquidMaterials = &ClientDBExtractor::GetLiquidMaterialStorage();
 
                     if (!adtParser.TryParse(context, rootBuffer, textBuffer, objBuffer, wdt, adt))
                         continue;
