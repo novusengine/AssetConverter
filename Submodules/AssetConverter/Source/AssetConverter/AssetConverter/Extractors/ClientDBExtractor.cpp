@@ -78,16 +78,22 @@ void FixPathExtension(std::string& path)
 std::string GetStringFromRecordIndex(DB2::WDC3::Layout& layout, DB2::WDC3::Parser& db2Parser, u32 recordIndex, u32 fieldIndex)
 {
 	std::string value = db2Parser.GetString(layout, recordIndex, fieldIndex);
+
 	FixPathExtension(value);
+
+    std::replace(value.begin(), value.end(), '\\', '/');
 
 	return value;
 }
 std::string GetStringFromArrRecordIndex(DB2::WDC3::Layout& layout, DB2::WDC3::Parser& db2Parser, u32 recordIndex, u32 fieldIndex, u32 arrIndex)
 {
 	std::string value = db2Parser.GetStringInArr(layout, recordIndex, fieldIndex, arrIndex);
+
 	FixPathExtension(value);
 
-	return value;
+    std::replace(value.begin(), value.end(), '\\', '/');
+
+    return value;
 }
 
 template <typename T>
