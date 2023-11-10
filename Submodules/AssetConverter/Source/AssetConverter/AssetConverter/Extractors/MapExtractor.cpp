@@ -29,7 +29,7 @@ void MapExtractor::Process()
     Runtime* runtime = ServiceLocator::GetRuntime();
     CascLoader* cascLoader = ServiceLocator::GetCascLoader();
 
-    Storage<Definitions::Map>& maps = ClientDBExtractor::GetMapStorage();
+    Storage<Definitions::Map> maps = ClientDBExtractor::GetMapStorage();
 
     bool createChunkAlphaMaps = runtime->json["Extraction"]["Map"]["BlendMaps"];
 
@@ -141,9 +141,14 @@ void MapExtractor::Process()
                     }
 
                     Adt::Parser::Context context = { };
-                    context.liquidObjects   = &ClientDBExtractor::GetLiquidObjectStorage();
-                    context.liquidTypes     = &ClientDBExtractor::GetLiquidTypeStorage();
-                    context.liquidMaterials = &ClientDBExtractor::GetLiquidMaterialStorage();
+
+                    auto liquidObjects = ClientDBExtractor::GetLiquidObjectStorage();
+                    auto liquidTypes = ClientDBExtractor::GetLiquidTypeStorage();
+                    auto liquidMaterials = ClientDBExtractor::GetLiquidMaterialStorage();
+
+                    context.liquidObjects = &liquidObjects;
+                    context.liquidTypes = &liquidTypes;
+                    context.liquidMaterials = &liquidMaterials;
 
                     if (!adtParser.TryParse(context, rootBuffer, textBuffer, objBuffer, wdt, adt))
                         continue;
@@ -291,7 +296,7 @@ void MapExtractor::Process()
                             }
                         }
 
-                        std::string localChunkBlendMapPath = "blendmaps\\" + mapInternalName + "\\" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".dds";
+                        std::string localChunkBlendMapPath = "blendmaps/" + mapInternalName + "/" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".dds";
                         chunk.chunkAlphaMapTextureHash = (StringUtils::fnv1a_32(localChunkBlendMapPath.c_str(), localChunkBlendMapPath.length()) * isAlphaMapSet) + (std::numeric_limits<u32>().max() * !isAlphaMapSet);
 
                         if (createChunkAlphaMaps && isAlphaMapSet)
@@ -302,7 +307,7 @@ void MapExtractor::Process()
                             blpConvert.ConvertRaw(64, 64, Terrain::CHUNK_NUM_CELLS, alphaMapBuffer->GetDataPointer(), Terrain::CHUNK_ALPHAMAP_TOTAL_BYTE_SIZE, BLP::InputFormat::BGRA_8UB, BLP::Format::BC1, chunkBlendMapOutputPath, false);
                         }
 
-                        std::string localChunkPath = mapInternalName + "\\" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".chunk";
+                        std::string localChunkPath = mapInternalName + "/" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".chunk";
                         std::string chunkOutputPath = (runtime->paths.map / localChunkPath).string();
                         chunk.Save(chunkOutputPath);
                     }
@@ -316,7 +321,7 @@ void MapExtractor::Process()
 
         std::shared_ptr<Bytebuffer> buffer = Bytebuffer::Borrow<sizeof(Map::Layout)>();
 
-        std::string localMapPath = mapInternalName + "\\" + mapInternalName + ".map";
+        std::string localMapPath = mapInternalName + "/" + mapInternalName + ".map";
         FileWriter fileWriter(runtime->paths.map / localMapPath, buffer);
 
         if (!buffer->Put(layout))
