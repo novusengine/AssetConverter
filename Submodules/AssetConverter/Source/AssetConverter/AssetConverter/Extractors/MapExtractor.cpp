@@ -67,10 +67,10 @@ void MapExtractor::Process()
 
         std::filesystem::create_directories(runtime->paths.map / mapInternalName);
 
-        Map::Layout layout = { };
-        layout.flags.UseMapObjectAsBase = wdt.mphd.flags.UseGlobalMapObj;
+        Map::MapHeader mapHeader = { };
+        mapHeader.flags.UseMapObjectAsBase = wdt.mphd.flags.UseGlobalMapObj;
 
-        if (layout.flags.UseMapObjectAsBase)
+        if (mapHeader.flags.UseMapObjectAsBase)
         {
             if (!wdt.modf.data.size())
                 continue;
@@ -86,7 +86,7 @@ void MapExtractor::Process()
                 continue;
             }
 
-            Terrain::Placement& placement = layout.placement;
+            Terrain::Placement& placement = mapHeader.placement;
             {
                 placement.uniqueID = placementInfo.uniqueID;
                 placement.nameHash = placementInfo.fileID;
@@ -320,12 +320,12 @@ void MapExtractor::Process()
             runtime->scheduler.WaitforTask(&convertMapTask);
         }
 
-        std::shared_ptr<Bytebuffer> buffer = Bytebuffer::Borrow<sizeof(Map::Layout)>();
+        std::shared_ptr<Bytebuffer> buffer = Bytebuffer::Borrow<sizeof(Map::MapHeader)>();
 
         std::string localMapPath = mapInternalName + "/" + mapInternalName + ".map";
         FileWriter fileWriter(runtime->paths.map / localMapPath, buffer);
 
-        if (!buffer->Put(layout))
+        if (!buffer->Put(mapHeader))
             continue;
 
         if (fileWriter.Write())
