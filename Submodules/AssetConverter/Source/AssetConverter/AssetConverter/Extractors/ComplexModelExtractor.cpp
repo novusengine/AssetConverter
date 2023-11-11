@@ -108,6 +108,7 @@ void ComplexModelExtractor::Process()
 
 					std::string textureName = texturePath.string();
 					std::transform(textureName.begin(), textureName.end(), textureName.begin(), ::tolower);
+					std::replace(textureName.begin(), textureName.end(), '\\', '/');
 
 					texture.textureHash = StringUtils::fnv1a_32(textureName.c_str(), textureName.length());
 				}

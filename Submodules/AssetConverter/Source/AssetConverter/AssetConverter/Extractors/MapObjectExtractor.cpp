@@ -147,6 +147,7 @@ void MapObjectExtractor::Process()
 
 						pathAsString = texturePath.string();
 						std::transform(pathAsString.begin(), pathAsString.end(), pathAsString.begin(), ::tolower);
+						std::replace(pathAsString.begin(), pathAsString.end(), '\\', '/');
 
 						material.textureID[j] = StringUtils::fnv1a_32(pathAsString.c_str(), pathAsString.length());
 					}
