@@ -236,6 +236,7 @@ void MapExtractor::Process()
 
                                 std::string texturePathStr = texturePath.string();
                                 std::transform(texturePathStr.begin(), texturePathStr.end(), texturePathStr.begin(), ::tolower);
+                                std::replace(texturePathStr.begin(), texturePathStr.end(), '\\', '/');
 
                                 u32 textureNameHash = StringUtils::fnv1a_32(texturePathStr.c_str(), texturePathStr.length());
                                 cell.layers[j].textureID = textureNameHash;
