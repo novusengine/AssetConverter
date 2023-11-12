@@ -63,7 +63,7 @@ void MapObjectExtractor::Process()
 			std::string pathStr = cascLoader->GetFilePathFromListFileID(wmoFileID);
 			std::transform(pathStr.begin(), pathStr.end(), pathStr.begin(), ::tolower);
 
-			fs::path outputPath = (runtime->paths.complexModel / pathStr).replace_extension("complexmodel");
+			fs::path outputPath = (runtime->paths.complexModel / pathStr).replace_extension(Model::FILE_EXTENSION);
 			fs::create_directories(outputPath.parent_path());
 
 			FileListEntry fileListEntry;
@@ -88,14 +88,10 @@ void MapObjectExtractor::Process()
 	enki::TaskSet convertWMOTask(numRootFiles, [&runtime, &cascLoader, &fileListQueue, &numProcessedFiles, &progressFlags, &printMutex, numRootFiles](enki::TaskSetPartition range, uint32_t threadNum)
 	{
 		Wmo::Parser wmoParser = { };
-		for (u32 index = range.start; index < range.end; index++)
-		{
-			FileListEntry fileListEntry;
-			if (!fileListQueue.try_dequeue(fileListEntry))
-			{
-				continue;
-			}
 
+		FileListEntry fileListEntry;
+		while(fileListQueue.try_dequeue(fileListEntry))
+		{
 			Wmo::Layout wmo = { };
 			std::shared_ptr<Bytebuffer> rootBuffer = cascLoader->GetFileByID(fileListEntry.fileID);
 			if (!wmoParser.TryParse(Wmo::Parser::ParseType::Root, rootBuffer, wmo))
@@ -114,7 +110,6 @@ void MapObjectExtractor::Process()
 				if (!wmoParser.TryParse(Wmo::Parser::ParseType::Group, groupBuffer, wmo))
 					continue;
 			}
-
 
 			Model::MapObject mapObject = { };
 			if (!Model::MapObject::FromWMO(wmo, mapObject))
@@ -171,7 +166,7 @@ void MapObjectExtractor::Process()
 						}
 
 						fs::path cmodelPath = cascFilePath;
-						cmodelPath.replace_extension("complexmodel");
+						cmodelPath.replace_extension(Model::FILE_EXTENSION);
 
 						pathAsString = cmodelPath.string();
 						std::transform(pathAsString.begin(), pathAsString.end(), pathAsString.begin(), ::tolower);

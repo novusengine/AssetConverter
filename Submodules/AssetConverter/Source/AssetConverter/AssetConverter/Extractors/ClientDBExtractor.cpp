@@ -62,11 +62,11 @@ void FixPathExtension(std::string& path)
 
 	if (StringUtils::EndsWith(path, ".mdx"))
 	{
-		path = path.substr(0, path.length() - 4) + ".complexmodel";
+		path = path.substr(0, path.length() - 4) + Model::FILE_EXTENSION;
 	}
 	else if (StringUtils::EndsWith(path, ".m2"))
 	{
-		path = path.substr(0, path.length() - 3) + ".complexmodel";
+		path = path.substr(0, path.length() - 3) + Model::FILE_EXTENSION;
 	}
 	else if (StringUtils::EndsWith(path, ".blp"))
 	{

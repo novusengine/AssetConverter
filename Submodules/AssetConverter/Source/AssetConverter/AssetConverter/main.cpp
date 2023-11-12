@@ -105,20 +105,20 @@ i32 main()
 
 			if (!JsonUtils::LoadFromPathOrCreate(runtime->json, fallbackJson, configPath))
 			{
-				DebugHandler::PrintFatal("[Runtime] Failed to Load {0} from {1}", CONFIG_NAME, absolutePath.c_str());
+				DebugHandler::PrintFatal("[AssetConverter] Failed to Load {0} from {1}", CONFIG_NAME, absolutePath.c_str());
 			}
 
 			std::string currentVersion = runtime->json["General"]["Version"];
 			if (currentVersion != CONFIG_VERSION)
 			{
-				DebugHandler::PrintFatal("[Runtime] Attempted to load outdated {0}. (Config Version : {1}, Expected Version : {2})", CONFIG_NAME.c_str(), currentVersion.c_str(), CONFIG_VERSION.c_str());
+				DebugHandler::PrintFatal("[AssetConverter] Attempted to load outdated {0}. (Config Version : {1}, Expected Version : {2})", CONFIG_NAME.c_str(), currentVersion.c_str(), CONFIG_VERSION.c_str());
 			}
 
 			runtime->isInDebugMode = runtime->json["General"]["DebugMode"];
 
 			if (!configExists)
 			{
-				DebugHandler::Print("[Runtime] This appears to be the first time you are running the asset converter. A config file have been created named 'AssetConverterConfig.json'.\nYou may want to go through the configuration file and set it up before running.\n\nPress any key if you wish to continue.");
+				DebugHandler::Print("[AssetConverter] This appears to be the first time you are running the asset converter. A config file have been created named 'AssetConverterConfig.json'.\nYou may want to go through the configuration file and set it up before running.\n\nPress any key if you wish to continue.");
 				std::cin.get();
 			}
 		}

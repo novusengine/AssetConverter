@@ -95,7 +95,7 @@ void CascListFile::ParseListFile()
 		_fileIDToPath[fileID] = filePath;
 		_filePathToID[filePath] = fileID;
 
-		if (StringUtils::EndsWith(filePath, ".m2"))
+		if (StringUtils::EndsWith(filePath, ".m2") || StringUtils::EndsWith(filePath, ".mdx"))
 		{
 			_m2Files.push_back(fileID);
 		}

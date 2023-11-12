@@ -13,6 +13,7 @@
 #include <FileFormat/Novus/ClientDB/Definitions.h>
 #include <FileFormat/Novus/Map/Map.h>
 #include <FileFormat/Novus/Map/MapChunk.h>
+#include <FileFormat/Novus/Model/ComplexModel.h>
 #include <FileFormat/Warcraft/ADT/Adt.h>
 #include <FileFormat/Warcraft/Parsers/WdtParser.h>
 #include <FileFormat/Warcraft/Parsers/AdtParser.h>
@@ -101,7 +102,7 @@ void MapExtractor::Process()
             }
 
             const std::string& filePath = cascLoader->GetFilePathFromListFileID(placement.nameHash);
-            fs::path wmoPath = fs::path(filePath).replace_extension(".complexmodel");
+            fs::path wmoPath = fs::path(filePath).replace_extension(Model::FILE_EXTENSION);
 
             u32 nameHash = StringUtils::fnv1a_32(wmoPath.string().c_str(), wmoPath.string().size());
             placement.nameHash = nameHash;
@@ -169,12 +170,12 @@ void MapExtractor::Process()
 
                             if (!cascLoader->FileExistsInCasc(placementInfo.nameHash))
                             {
-                                DebugHandler::PrintError("Skipped map object placement because file doesn't exist");
+                                DebugHandler::PrintError("[Map Extractor] Skipped map object placement because file doesn't exist");
                                 continue;
                             }
 
                             const std::string& wmoPathStr = cascLoader->GetFilePathFromListFileID(placementInfo.nameHash);
-                            fs::path wmoPath = fs::path(wmoPathStr).replace_extension(".complexmodel");
+                            fs::path wmoPath = fs::path(wmoPathStr).replace_extension(Model::FILE_EXTENSION);
 
                             u32 nameHash = StringUtils::fnv1a_32(wmoPath.string().c_str(), wmoPath.string().size());
                             placementInfo.nameHash = nameHash;
@@ -195,7 +196,7 @@ void MapExtractor::Process()
                             }
 
                             const std::string& m2PathStr = cascLoader->GetFilePathFromListFileID(placementInfo.nameHash);
-                            fs::path m2Path = fs::path(m2PathStr).replace_extension(".complexmodel");
+                            fs::path m2Path = fs::path(m2PathStr).replace_extension(Model::FILE_EXTENSION);
 
                             u32 nameHash = StringUtils::fnv1a_32(m2Path.string().c_str(), m2Path.string().size());
                             placementInfo.nameHash = nameHash;
@@ -308,7 +309,7 @@ void MapExtractor::Process()
                             blpConvert.ConvertRaw(64, 64, Terrain::CHUNK_NUM_CELLS, alphaMapBuffer->GetDataPointer(), Terrain::CHUNK_ALPHAMAP_TOTAL_BYTE_SIZE, BLP::InputFormat::BGRA_8UB, BLP::Format::BC1, chunkBlendMapOutputPath, false);
                         }
 
-                        std::string localChunkPath = mapInternalName + "/" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".chunk";
+                        std::string localChunkPath = mapInternalName + "/" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + Map::CHUNK_FILE_EXTENSION;
                         std::string chunkOutputPath = (runtime->paths.map / localChunkPath).string();
                         chunk.Save(chunkOutputPath);
                     }
@@ -320,15 +321,8 @@ void MapExtractor::Process()
             runtime->scheduler.WaitforTask(&convertMapTask);
         }
 
-        std::shared_ptr<Bytebuffer> buffer = Bytebuffer::Borrow<sizeof(Map::MapHeader)>();
-
-        std::string localMapPath = mapInternalName + "/" + mapInternalName + ".map";
-        FileWriter fileWriter(runtime->paths.map / localMapPath, buffer);
-
-        if (!buffer->Put(mapHeader))
-            continue;
-
-        if (fileWriter.Write())
+        std::string mapHeaderPath = runtime->paths.map.string() + "/" + mapInternalName + "/" + mapInternalName + Map::HEADER_FILE_EXTENSION;
+        if (mapHeader.Save(mapHeaderPath))
         {
             DebugHandler::Print("[Map Extractor] Extracted {0}", mapInternalName);
         }
