@@ -1,6 +1,6 @@
 [submodule "Submodules/Engine"]
 	path = Submodules/Engine
 	url = https://github.com/novuscore/Engine.git
-[submodule "Submodules/AssetConverter/Dependencies/Cuttlefish"]
-	path = Submodules/AssetConverter/Dependencies/Cuttlefish
+[submodule "Dependencies/Cuttlefish/Cuttlefish"]
+	path = Dependencies/Cuttlefish/Cuttlefish
 	url = https://github.com/akb825/Cuttlefish.git
