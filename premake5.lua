@@ -3,20 +3,13 @@ AssetConverter.name = "AssetConverter"
 AssetConverter.isRoot = false
 
 AssetConverter.Init = function(self, rootDir, buildDir, binDir)
-    print("-- Configuring (" .. self.name .. ") --\n")
-
     self.rootDir = rootDir
     self.buildDir = buildDir
     self.binDir = binDir
 
-    local buildSettings = path.getabsolute("BuildSettings.lua", self.rootDir)
-    local projectUtils = path.getabsolute("ProjectUtil.lua", self.rootDir)
-    include(buildSettings)
-    include(projectUtils)
-
     workspace "AssetConverter"
         location (self.buildDir)
-        configurations { "debug", "release" }
+        configurations { "Debug", "RelDebug", "Release" }
 
         filter "system:Windows"
             system "windows"
@@ -26,12 +19,22 @@ AssetConverter.Init = function(self, rootDir, buildDir, binDir)
             system "linux"
             platforms "Linux"
 
+    local projectUtils = path.getabsolute("ProjectUtil.lua", rootDir)
+    include(projectUtils)
+
+    local buildSettings = path.getabsolute("BuildSettings.lua", self.rootDir)
+    local silentFailOnDuplicateSetting = false
+    InitBuildSettings(silentFailOnDuplicateSetting)
+    include(buildSettings)
+
     local engineRootDir = path.getabsolute("Submodules/Engine/", rootDir)
-    local engineBuildDir = path.getabsolute("build/engine/", rootDir)
+    local engineBuildDir = path.getabsolute("Build/Engine/", rootDir)
     local enginePremakeFile = path.getabsolute("premake5.lua", engineRootDir)
     include(enginePremakeFile)
+
     Engine:Init(engineRootDir, engineBuildDir, binDir)
 
+    print("-- Configuring (" .. self.name .. ") --\n")
     print("\n-- Directory Info (" .. self.name .. ") --")
     print(" Root Directory : " .. self.rootDir)
     print(" Build Directory : " .. self.buildDir)
@@ -50,8 +53,8 @@ if HasRoot == nil then
     HasRoot = true
 
     local rootDir = path.getabsolute(".")
-    local buildDir = path.getabsolute("build/", rootDir)
-    local binDir = path.getabsolute("bin/", buildDir)
+    local buildDir = path.getabsolute("Build/", rootDir)
+    local binDir = path.getabsolute("Bin/", buildDir)
 
     AssetConverter.isRoot = true
     AssetConverter:Init(rootDir, buildDir, binDir)
