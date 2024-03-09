@@ -7,7 +7,7 @@
 #include <Base/Util/DebugHandler.h>
 #include <Base/Util/StringUtils.h>
 
-#include <TaskScheduler.h>
+#include <enkiTS/TaskScheduler.h>
 
 #include <filesystem>
 namespace fs = std::filesystem;
