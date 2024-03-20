@@ -49,4 +49,4 @@
 
 5. Run the `AssetConverter.exe` again. This process may take up to 5 minutes, but varies from setup to setup.
     - Compiling the project in debug instead of release causes this step to take an exponentionally longer amount of time.
-6. When the Asset Converter is finished, a new folder called `Data` will be generated. This folder will be used by the [Game](https://github.com/novusengine/Game) and will be discused in that project's README text file.
+6. When the Asset Converter is finished, a new folder called `Data` will be generated. This folder will be used by the [Game](https://github.com/novusengine/Game) and will be discused in that project's README.
