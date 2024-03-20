@@ -19,7 +19,7 @@
   {
     "General": {
         "Version": "0.4",
-        "ThreadCount": 0,
+        "ThreadCount": -1,
         "DebugMode": false
     },
     "Casc": {
