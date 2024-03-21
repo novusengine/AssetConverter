@@ -1,0 +1,30 @@
+{
+    "General": {
+        "Version": "0.4",
+        "ThreadCount": -1,
+        "DebugMode": false
+    },
+    "Casc": {
+        "Locale": "enGB",
+        "ListFile": "listfile.csv"
+    },
+    "Extraction": {
+        "Enabled": true,
+        "ClientDB": {
+            "Enabled": true
+        },
+        "Map": {
+            "Enabled": true,
+            "BlendMaps": true
+        },
+        "MapObject": {
+            "Enabled": true
+        },
+        "ComplexModel": {
+            "Enabled": true
+        },
+        "Texture": {
+            "Enabled": true
+        }
+    }
+}
