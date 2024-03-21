@@ -25,9 +25,9 @@ Here we include a honorable mention to all the libraries included directly into 
 - [Casc](https://github.com/heksesang/CascLib)
 - [Cuttlefish](https://github.com/akb825/Cuttlefish)
 
-## How to build
+## How to build (Microsoft Visual 2022)
 >[!TIP]
-> It's recommended to fork, clone, and build [Engine](https://github.com/novusengine/Engine) first and use a [symlink](https://schinagl.priv.at/nt/hardlinkshellext/linkshellextension.html) to link the engine into the `Submodule` folder of the Asset Converter.
+> It's recommended to fork, clone, and build [Engine](https://github.com/novusengine/Engine) first.
 1. Download the dependencies.
 2. Fork and clone the repositry
 3. Open the project folder and open a terminal within the project's directory.
