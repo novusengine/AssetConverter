@@ -53,55 +53,14 @@ i32 main()
 
 			nlohmann::ordered_json fallbackJson;
 
-			// Setup Default
-			{
-				fallbackJson["General"] =
-				{
-					{ "Version",			CONFIG_VERSION },
-					{ "ThreadCount",		std::thread::hardware_concurrency() - 1 },
-					{ "DebugMode",			false }
-				};
-
-				fallbackJson["Casc"] =
-				{
-					{ "Locale",				"enGB" },
-					{ "ListFile",			"listfile.csv" }
-				};
-
-				fallbackJson["Extraction"] =
-				{
-					{ "Enabled",			true },
-
-					{ "ClientDB",
-						{
-							{ "Enabled",	true }
-						}
-					},
-					{ "Map",		
-						{
-							{ "Enabled",	true },
-							{ "BlendMaps",	true }
-						}
-					},
-					{ "MapObject",		
-						{
-							{ "Enabled",	true }
-						}
-					},
-					{ "ComplexModel",		
-						{
-							{ "Enabled",	true }
-						}
-					},
-					{ "Texture",		
-						{
-							{ "Enabled",	true }
-						}
-					}
-				};
-			}
-
 			bool configExists = fs::exists(configPath);
+
+			if (!configExists)
+			{
+				DebugHandler::Print("[AssetConverter] Please copy the AssetConverterConfig.json to this folder.\n\nPress 'Enter' to exit.");
+				std::cin.get();
+				return 0;
+			}
 
 			if (!JsonUtils::LoadFromPathOrCreate(runtime->json, fallbackJson, configPath))
 			{
@@ -115,12 +74,6 @@ i32 main()
 			}
 
 			runtime->isInDebugMode = runtime->json["General"]["DebugMode"];
-
-			if (!configExists)
-			{
-				DebugHandler::Print("[AssetConverter] This appears to be the first time you are running the asset converter. A config file have been created named 'AssetConverterConfig.json'.\nYou may want to go through the configuration file and set it up before running.\n\nPress any key if you wish to continue.");
-				std::cin.get();
-			}
 		}
 
 		// Setup Scheduler
