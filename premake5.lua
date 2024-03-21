@@ -13,7 +13,7 @@ AssetConverter.Init = function(self, rootDir, buildDir, binDir)
     workspace (self.name)
         location (buildDir)
         configurations { "Debug", "RelDebug", "Release" }
-		startproject "AssetConverter"
+	startproject "AssetConverter"
 
         filter "system:Windows"
             system "windows"
