@@ -15,42 +15,6 @@
 
 ## How to use
 1. Download the `community-listfile.csv` from [here](https://github.com/wowdev/wow-listfile) and rename it to `listfile`.
-2. Go to your `../World of Warcraft/_classic"` folder and copy the `listfile.csv` and `AssetConverter.exe` to this folder.
-3. Run the `AssetConverter.exe`. If this is the first time running it, close the terminal.
-4. A new file named `AssetConverterConfig` has been created. Open it.
-    - If this is not your first time running the Asset Converter and you don't want to extract certain files, set `"Enabled:"` to `false` to the relavant value(s).
-    - If this is your first time, make sure your file looks like this:
-  ```json
-  {
-    "General": {
-        "Version": "0.4",
-        "ThreadCount": -1,
-        "DebugMode": false
-    },
-    "Casc": {
-        "Locale": "enGB",
-        "ListFile": "listfile.csv"
-    },
-    "Extraction": {
-        "Enabled": true,
-        "ClientDB": {
-            "Enabled": true
-        },
-        "Map": {
-            "Enabled": true,
-            "BlendMaps": true
-        },
-        "MapObject": {
-            "Enabled": true
-        },
-        "ComplexModel": {
-            "Enabled": true
-        },
-        "Texture": {
-            "Enabled": true
-        }
-    }
-   ```
-
-5. Run the `AssetConverter.exe` again. This process may take up to 5 minutes, but varies from setup to setup.
-6. When the Asset Converter is finished, a new folder called `Data` will be generated. This folder will be used by the [Game](https://github.com/novusengine/Game) and will be discused in that project's README.
+2. Go to your `../World of Warcraft/_classic"` folder and copy the `listfile.csv`, `AssetConverterConfig.json`, and the `AssetConverter.exe` to this folder.
+3. Run the `AssetConverter.exe`. This process may take up to 5 minutes, but varies from setup to setup.
+4. When the Asset Converter is finished, a new folder called `Data` will be generated. This folder will be used by the [Game](https://github.com/novusengine/Game) and will be discused in that project's README.
