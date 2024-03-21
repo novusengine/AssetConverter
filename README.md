@@ -15,8 +15,8 @@ You will find the developers to be active on the discord and always up for answe
 
 ## Dependencies
 * [OpenSSL 1.1.0](https://www.openssl.org/source/)
-* [CMAKE 3.12 or newer](https://cmake.org/download/)
-* [Vulkan](https://vulkan.lunarg.com/)
+* [Premake5](https://premake.github.io/)
+* [Vulkan 1.1 (or higher)](https://vulkan.lunarg.com/)
 
 ## Libraries
 Here we include a honorable mention to all the libraries included directly into the source of NovusCore. You do not need to download these on your own, but we felt it was important to address these as without them, NovusCore would be a lot more time consuming to develop.
@@ -32,6 +32,7 @@ Here we include a honorable mention to all the libraries included directly into 
 ## How to build
 >[!TIP]
 > It's recommended to fork, clone, and build [Engine](https://github.com/novusengine/Engine) first and use a [symlink](https://schinagl.priv.at/nt/hardlinkshellext/linkshellextension.html) to link the engine into the `Submodule` folder of the Asset Converter.
+1. Download the dependencies.
 1. Fork and clone the repositry
 2. Open the project folder and open a terminal within the project's directory.
 3. Use the command `premake5 vs2022`
