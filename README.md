@@ -48,5 +48,7 @@ Here we include a honorable mention to all the libraries included directly into 
 ## How to use
 1. Download the `community-listfile.csv` from [here](https://github.com/wowdev/wow-listfile) and rename it to `listfile`.
 2. Go to your `../World of Warcraft/_classic"` folder and copy the `listfile.csv`, `AssetConverterConfig.json`, and the `AssetConverter.exe` to this folder.
+>[!TIP]
+>The `AssetConverterConfig.json` is located in the project's root directory.
 3. Run the `AssetConverter.exe`. This process may take up to 5 minutes, but varies from setup to setup.
 4. When the Asset Converter is finished, a new folder called `Data` will be generated. This folder will be used by the [Game](https://github.com/novusengine/Game) and will be discused in that project's README.
