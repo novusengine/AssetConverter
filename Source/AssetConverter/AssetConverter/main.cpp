@@ -54,10 +54,9 @@ i32 main()
 			nlohmann::ordered_json fallbackJson;
 
 			bool configExists = fs::exists(configPath);
-
 			if (!configExists)
 			{
-				DebugHandler::Print("[AssetConverter] Please copy the AssetConverterConfig.json to this folder.\n\nPress 'Enter' to exit.");
+				DebugHandler::PrintFatal("[AssetConverter] Please copy the {0} to this folder.\n\nPress 'Enter' to exit.", CONFIG_NAME);
 				std::cin.get();
 				return 0;
 			}
