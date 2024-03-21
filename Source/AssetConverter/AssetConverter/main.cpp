@@ -57,8 +57,6 @@ i32 main()
 			if (!configExists)
 			{
 				DebugHandler::PrintFatal("[AssetConverter] Please copy the {0} to this folder.\n\nPress 'Enter' to exit.", CONFIG_NAME);
-				std::cin.get();
-				return 0;
 			}
 
 			if (!JsonUtils::LoadFromPathOrCreate(runtime->json, fallbackJson, configPath))
