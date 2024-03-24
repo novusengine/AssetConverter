@@ -3,6 +3,7 @@
 #include "AssetConverter/Blp/BlpConvert.h"
 #include "AssetConverter/Casc/CascLoader.h"
 #include "AssetConverter/Extractors/ClientDBExtractor.h"
+#include "AssetConverter/Util/JoltStream.h"
 #include "AssetConverter/Util/ServiceLocator.h"
 
 #include <Base/Util/StringUtils.h>
@@ -21,9 +22,35 @@
 #include <enkiTS/TaskScheduler.h>
 #include <glm/gtx/euler_angles.inl>
 
+#include <Jolt/Jolt.h>
+#include <Jolt/Geometry/Triangle.h>
+#include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
+
 #include <string_view>
 
 using namespace ClientDB;
+
+vec2 GetCellVertexPosition(u32 cellID, u32 vertexID)
+{
+    const i32 cellX = ((cellID % Terrain::CHUNK_NUM_CELLS_PER_STRIDE));
+    const i32 cellY = ((cellID / Terrain::CHUNK_NUM_CELLS_PER_STRIDE));
+
+    const i32 vX = vertexID % 17;
+    const i32 vY = vertexID / 17;
+
+    bool isOddRow = vX > 8;
+
+    vec2 vertexOffset;
+    vertexOffset.x = -(8.5f * isOddRow);
+    vertexOffset.y = (0.5f * isOddRow);
+
+    ivec2 globalVertex = ivec2(vX + cellX * 8, vY + cellY * 8);
+
+    vec2 finalPos = (vec2(globalVertex) + vertexOffset) * Terrain::PATCH_SIZE;
+
+    return vec2(finalPos.x, -finalPos.y);
+}
 
 void MapExtractor::Process()
 {
@@ -246,7 +273,7 @@ void MapExtractor::Process()
                                 cell.layers[j].textureID = textureNameHash;
 
                                 // If the layer has alpha data, add it to our per-chunk alphamap
-                                if (createChunkAlphaMaps && j > 0)
+                                if (j > 0)
                                 {
                                     u32 channel = swizzleMap[j - 1];
 
@@ -313,6 +340,99 @@ void MapExtractor::Process()
                             
                             BLP::BlpConvert blpConvert;
                             blpConvert.ConvertRaw(64, 64, Terrain::CHUNK_NUM_CELLS, alphaMapBuffer->GetDataPointer(), Terrain::CHUNK_ALPHAMAP_TOTAL_BYTE_SIZE, BLP::InputFormat::BGRA_8UB, BLP::Format::BC1, chunkBlendMapOutputPath, false);
+                        }
+
+                        // if build physics shapes
+                        {
+                            constexpr u32 numVerticesPerChunk = Terrain::CHUNK_NUM_CELLS * Terrain::CELL_TOTAL_GRID_SIZE;
+                            constexpr u32 numTrianglePerChunk = Terrain::CHUNK_NUM_CELLS * Terrain::CELL_NUM_TRIANGLES;
+
+                            JPH::VertexList vertexList;
+                            JPH::IndexedTriangleList triangleList;
+                            vertexList.reserve(numVerticesPerChunk);
+                            triangleList.reserve(numTrianglePerChunk);
+
+                            u32 patchVertexIDs[5] = { 0 };
+                            vec2 patchVertexOffsets[5] =
+                            {
+                                vec2(0, 0),
+                                vec2(Terrain::PATCH_SIZE, 0),
+                                vec2(Terrain::PATCH_HALF_SIZE, Terrain::PATCH_HALF_SIZE),
+                                vec2(0, Terrain::PATCH_SIZE),
+                                vec2(Terrain::PATCH_SIZE, Terrain::PATCH_SIZE)
+                            };
+
+                            uvec2 triangleComponentOffsets = uvec2(0, 0);
+
+                            for (u32 cellID = 0; cellID < Terrain::CHUNK_NUM_CELLS; cellID++)
+                            {
+                                const Map::Cell& cell = chunk.cells[cellID];
+
+                                for (u32 i = 0; i < Terrain::CELL_TOTAL_GRID_SIZE; i++)
+                                {
+                                    const Map::Cell::VertexData& vertexA = cell.vertexData[i];
+
+                                    vec2 pos = GetCellVertexPosition(cellID, i);
+                                    assert(pos.x <= Terrain::CHUNK_SIZE);
+                                    assert(pos.y <= Terrain::CHUNK_SIZE);
+
+                                    vertexList.push_back({ pos.x, f32(vertexA.height), pos.y });
+                                }
+
+                                for (u32 i = 0; i < Terrain::CELL_NUM_TRIANGLES; i++)
+                                {
+                                    u32 triangleID = i;
+                                    u32 patchID = triangleID / 4;
+                                    u32 patchRow = patchID / 8;
+                                    u32 patchColumn = patchID % 8;
+
+                                    u32 patchX = patchID % Terrain::CELL_NUM_PATCHES_PER_STRIDE;
+                                    u32 patchY = patchID / Terrain::CELL_NUM_PATCHES_PER_STRIDE;
+
+                                    vec2 patchPos = vec2(patchX * Terrain::PATCH_SIZE, patchY * Terrain::PATCH_SIZE);
+
+                                    // Top Left is calculated like this
+                                    patchVertexIDs[0] = patchColumn + (patchRow * Terrain::CELL_GRID_ROW_SIZE);
+
+                                    // Top Right is always +1 from Top Left
+                                    patchVertexIDs[1] = patchVertexIDs[0] + 1;
+
+                                    // Bottom Left is always NUM_VERTICES_PER_PATCH_ROW from the Top Left vertex
+                                    patchVertexIDs[2] = patchVertexIDs[0] + Terrain::CELL_GRID_ROW_SIZE;
+
+                                    // Bottom Right is always +1 from Bottom Left
+                                    patchVertexIDs[3] = patchVertexIDs[2] + 1;
+
+                                    // Center is always NUM_VERTICES_PER_OUTER_PATCH_ROW from Top Left
+                                    patchVertexIDs[4] = patchVertexIDs[0] + Terrain::CELL_OUTER_GRID_STRIDE;
+
+                                    u32 triangleWithinPatch = triangleID % 4; // 0 - top, 1 - left, 2 - bottom, 3 - right
+                                    triangleComponentOffsets = uvec2(triangleWithinPatch > 1, // Identify if we are within bottom or right triangle
+                                        triangleWithinPatch == 0 || triangleWithinPatch == 3); // Identify if we are within the top or right triangle
+
+                                    u32 vertexID1 = (cellID * Terrain::CELL_TOTAL_GRID_SIZE) + patchVertexIDs[4];
+                                    u32 vertexID2 = (cellID * Terrain::CELL_TOTAL_GRID_SIZE) + patchVertexIDs[triangleComponentOffsets.x * 2 + triangleComponentOffsets.y];
+                                    u32 vertexID3 = (cellID * Terrain::CELL_TOTAL_GRID_SIZE) + patchVertexIDs[(!triangleComponentOffsets.y) * 2 + triangleComponentOffsets.x];
+                                    triangleList.push_back({ vertexID3, vertexID2, vertexID1 });
+                                }
+                            }
+
+                            JPH::MeshShapeSettings shapeSetting(vertexList, triangleList);
+                            JPH::ShapeSettings::ShapeResult shapeResult = shapeSetting.Create();
+                            JPH::ShapeRefC shape = shapeResult.Get();
+
+                            JPH::Shape::ShapeToIDMap shapeMap;
+                            JPH::Shape::MaterialToIDMap materialMap;
+
+                            std::shared_ptr<Bytebuffer> joltChunkBuffer = Bytebuffer::Borrow<16777216>();
+                            JoltStream joltStream(joltChunkBuffer);
+                            shape->SaveWithChildren(joltStream, shapeMap, materialMap);
+
+                            if (!joltStream.IsFailed() && joltChunkBuffer->writtenData > 0)
+                            {
+                                chunk.physicsData.resize(joltChunkBuffer->writtenData);
+                                memcpy(&chunk.physicsData[0], joltChunkBuffer->GetDataPointer(), joltChunkBuffer->writtenData);
+                            }
                         }
 
                         std::string localChunkPath = mapInternalName + "/" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + Map::CHUNK_FILE_EXTENSION;

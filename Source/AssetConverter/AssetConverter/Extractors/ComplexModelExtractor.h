@@ -4,5 +4,5 @@
 class ComplexModelExtractor
 {
 public:
-	static void Process();
+    static void Process();
 };

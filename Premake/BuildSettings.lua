@@ -21,6 +21,15 @@ BuildSettings:Add("Typesafe Enable Precondition Checks", false)
 BuildSettings:Add("Typesafe Enable Wrapper", false)
 BuildSettings:Add("Typesafe Arithmetic Policy", 0) -- (0 = "default", 1 = "ub", 2 = "checked")
 
+-- Settings for Jolt
+BuildSettings:Add("Jolt Floating Point Exceptions", false)
+BuildSettings:Add("Jolt Double Precision", false)
+BuildSettings:Add("Jolt Cross Platform Deterministic", false)
+BuildSettings:Add("Jolt Object Layer Bits", 16)
+BuildSettings:Add("Jolt Track Broadphase Stats", false)
+BuildSettings:Add("Jolt Track Narrowphase Stats", false)
+-- TODO : Add Support for AVX, SSE etc for Jolt
+
 -- Custom (DO NOT TOUCH)
 local isMSVC = string.sub(_ACTION, 1, 2) == "vs"
 BuildSettings:Add("Using MSVC", isMSVC)

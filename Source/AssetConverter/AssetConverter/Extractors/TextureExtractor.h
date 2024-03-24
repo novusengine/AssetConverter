@@ -4,5 +4,5 @@
 class TextureExtractor
 {
 public:
-	static void Process();
+    static void Process();
 };

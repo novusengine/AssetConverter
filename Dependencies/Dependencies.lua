@@ -10,6 +10,7 @@ local dependencies =
 {
     "Casc/Casc.lua",
     "Cuttlefish/Cuttlefish.lua",
+    "jolt/jolt.lua",
 }
 
 for k,v in pairs(dependencies) do

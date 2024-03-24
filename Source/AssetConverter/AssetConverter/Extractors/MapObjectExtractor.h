@@ -4,5 +4,5 @@
 class MapObjectExtractor
 {
 public:
-	static void Process();
+    static void Process();
 };
