@@ -5,12 +5,12 @@ CascLoader* ServiceLocator::_cascLoader = nullptr;
 
 Runtime* ServiceLocator::SetRuntime(Runtime* runtime)
 {
-	_runtime = runtime;
-	return _runtime;
+    _runtime = runtime;
+    return _runtime;
 }
 
 CascLoader* ServiceLocator::SetCascLoader(CascLoader* cascLoader)
 {
-	_cascLoader = cascLoader;
-	return _cascLoader;
+    _cascLoader = cascLoader;
+    return _cascLoader;
 }
