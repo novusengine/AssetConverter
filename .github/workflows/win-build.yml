@@ -16,6 +16,10 @@ jobs:
         submodules: false
         repository: novusengine/AssetConverter
 
+    - name: Checkout submodules
+      run: |
+        git submodule update --init --recursive
+
     - name: Premake
       run: |
         premake5 vs2022
