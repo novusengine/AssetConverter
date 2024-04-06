@@ -62,7 +62,7 @@ namespace BLP
 
         bool enableHeightSizeCompressionOverride = overrideCompressionSize.x != -1;
         bool enableWidthSizeCompressionOverride = overrideCompressionSize.y != -1;
-        bool enableCompression = useCompression || ((enableWidthSizeCompressionOverride && header.width >= overrideCompressionSize.x) || (enableHeightSizeCompressionOverride && header.height >= overrideCompressionSize.y));
+        bool enableCompression = useCompression || ((enableWidthSizeCompressionOverride && header.width >= (uint32_t)overrideCompressionSize.x) || (enableHeightSizeCompressionOverride && header.height >= (uint32_t)overrideCompressionSize.y));
 
         // Use compression if specified or if the width/height is >= 256
         if (enableCompression)
