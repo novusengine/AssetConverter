@@ -685,7 +685,8 @@ local function SetupLib()
     local dependencies = { "glm" }
     local defines = { "_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS", "_SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS" }
 
-    ProjectTemplate("Cuttlefish", "StaticLib", nil, AssetConverter.binDir, dependencies, defines)
+    local cppVersion = 17
+    ProjectTemplate("Cuttlefish", "StaticLib", nil, AssetConverter.binDir, dependencies, defines, cppVersion)
 
     local sourceDir = path.getabsolute("lib/src", basePath)
     local includeDir = path.getabsolute("lib/include", basePath)

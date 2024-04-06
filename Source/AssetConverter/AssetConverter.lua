@@ -4,4 +4,7 @@ ProjectTemplate("AssetConverter", "ConsoleApp", ".", AssetConverter.binDir, depe
 
 filter { 'system:Windows' }
   files { 'appicon.rc', '**.ico' }
-  vpaths { ['Resources/*'] = { '*.rc', '**.ico' } }
+  vpaths {
+    { ['Resources/**'] = { '*.rc', '**.ico' } },
+    { ['**'] = '**' }
+  }
