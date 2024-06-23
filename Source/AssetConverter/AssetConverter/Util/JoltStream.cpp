@@ -21,7 +21,7 @@ void JoltStream::WriteBytes(const void* inData, size_t inNumBytes)
     if (!_buffer->PutBytes(inData, inNumBytes))
     {
         _didFail = true;
-        DebugHandler::PrintError("Failed to write bytes to JoltStream");
+        NC_LOG_ERROR("Failed to write bytes to JoltStream");
     }
 }
 

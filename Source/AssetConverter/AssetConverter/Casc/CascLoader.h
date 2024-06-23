@@ -4,7 +4,7 @@
 #include <Base/Types.h>
 #include <Base/Memory/Bytebuffer.h>
 
-#include <CascLib.h>
+#include <Casc/CascLib.h>
 
 class CascLoader
 {
@@ -30,8 +30,9 @@ public:
     std::shared_ptr<Bytebuffer> GetFileByPath(std::string filePath);
     std::shared_ptr<Bytebuffer> GetFileByListFilePath(const std::string& filePath);
     bool FileExistsInCasc(u32 fileID);
-
     bool ListFileContainsID(u32 fileID) { return _listFile.HasFileWithID(fileID); }
+    bool InCascAndListFile(u32 fileID) { return FileExistsInCasc(fileID) && ListFileContainsID(fileID); }
+
     const std::string& GetFilePathFromListFileID(u32 fileID)
     {
         return _listFile.GetFilePathFromID(fileID);
@@ -49,7 +50,7 @@ public:
     const CascListFile& GetListFile() { return _listFile; }
 
 private:
-    static bool LoadingCallback(void* ptrUserParam, LPCSTR szWork, LPCSTR szObject, DWORD currentValue, DWORD totalValue);
+    static bool LoadingCallback(void* ptrUserParam, CASC_PROGRESS_MSG message, LPCSTR szObject, DWORD currentValue, DWORD totalValue);
     std::shared_ptr<Bytebuffer> GetFileByHandle(void* handle);
     std::shared_ptr<Bytebuffer> GetFilePartialByHandle(void* handle, u32 size);
 

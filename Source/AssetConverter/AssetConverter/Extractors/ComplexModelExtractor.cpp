@@ -45,7 +45,17 @@ void ComplexModelExtractor::Process()
         {
             u32 m2FileID = m2FileIDs[index];
 
-            if (!cascLoader->FileExistsInCasc(m2FileID))
+            switch (m2FileID)
+            {
+                case 5779493:
+                case 5779495:
+                    continue;
+
+                default:
+                    break;
+            }
+
+            if (!cascLoader->InCascAndListFile(m2FileID))
                 continue;
 
             std::string pathStr = cascLoader->GetFilePathFromListFileID(m2FileID);
@@ -71,7 +81,7 @@ void ComplexModelExtractor::Process()
     u16 progressFlags = 0;
 
     u32 numModelsToProcess = static_cast<u32>(fileListQueue.size_approx());
-    DebugHandler::Print("[ComplexModel Extractor] Processing {0} files", numModelsToProcess);
+    NC_LOG_INFO("[ComplexModel Extractor] Processing {0} files", numModelsToProcess);
 
     enki::TaskSet convertM2Task(numModelsToProcess, [&runtime, &cascLoader, &fileListQueue, &numProcessedFiles, &progressFlags, &printMutex, numModelsToProcess](enki::TaskSetPartition range, uint32_t threadNum)
     {
@@ -86,7 +96,10 @@ void ComplexModelExtractor::Process()
 
             M2::Layout m2 = { };
             if (!m2Parser.TryParse(M2::Parser::ParseType::Root, rootBuffer, m2))
+            {
+                NC_LOG_WARNING("Tried to parse M2 Root but failed {0}", fileListEntry.fileID);
                 continue;
+            }
 
             std::shared_ptr<Bytebuffer> skinBuffer = cascLoader->GetFileByID(m2.sfid.skinFileIDs[0]);
             if (!skinBuffer || skinBuffer->size == 0 || skinBuffer->writtenData == 0)
@@ -111,7 +124,7 @@ void ComplexModelExtractor::Process()
                     if (fileID == 0 || fileID == std::numeric_limits<u32>().max())
                         continue;
 
-                    if (!cascLoader->ListFileContainsID(fileID))
+                    if (!cascLoader->InCascAndListFile(fileID))
                         continue;
 
                     const std::string& cascFilePath = cascLoader->GetFilePathFromListFileID(fileID);
@@ -187,19 +200,18 @@ void ComplexModelExtractor::Process()
             {
                 if (result)
                 {
-                    DebugHandler::Print("[ComplexModel Extractor] Extracted {0}", fileListEntry.fileName);
+                    NC_LOG_INFO("[ComplexModel Extractor] Extracted {0}", fileListEntry.fileName);
                 }
                 else
                 {
-                    DebugHandler::PrintWarning("[ComplexModel Extractor] Failed to extract {0}", fileListEntry.fileName);
+                    NC_LOG_WARNING("[ComplexModel Extractor] Failed to extract {0}", fileListEntry.fileName);
                 }
             }
 
             {
                 std::scoped_lock scopedLock(printMutex);
                 
-                f32 processedFiles = static_cast<f32>(++numProcessedFiles);
-                f32 progress = (processedFiles / static_cast<f32>(numModelsToProcess - 1)) * 10.0f;
+                f32 progress = (static_cast<f32>(numProcessedFiles++) / static_cast<f32>(numModelsToProcess - 1)) * 10.0f;
                 u32 bitToCheck = static_cast<u32>(progress);
                 u32 bitMask = 1 << bitToCheck;
                 
@@ -207,7 +219,7 @@ void ComplexModelExtractor::Process()
                 if (reportStatus)
                 {
                     progressFlags |= bitMask;
-                    DebugHandler::Print("[ComplexModel Extractor] Progress Status ({0:.0f}% / 100%)", progress * 10.0f);
+                    NC_LOG_INFO("[ComplexModel Extractor] Progress Status ({0:.0f}% / 100%)", progress * 10.0f);
                 }
             }
         }

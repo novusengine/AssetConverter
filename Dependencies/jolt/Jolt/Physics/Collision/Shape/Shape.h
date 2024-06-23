@@ -145,6 +145,10 @@ public:
 	/// Create a shape according to the settings specified by this object.
 	virtual ShapeResult				Create() const = 0;
 
+	/// When creating a shape, the result is cached so that calling Create() again will return the same shape.
+	/// If you make changes to the ShapeSettings you need to call this function to clear the cached result to allow Create() to build a new shape.
+	void							ClearCachedResult()													{ mCachedResult.Clear(); }
+
 	/// User data (to be used freely by the application)
 	uint64							mUserData = 0;
 
@@ -433,9 +437,6 @@ protected:
 
 	/// A fallback version of CollidePoint that uses a ray cast and counts the number of hits to determine if the point is inside the shape. Odd number of hits means inside, even number of hits means outside.
 	static void						sCollidePointUsingRayCast(const Shape &inShape, Vec3Arg inPoint, const SubShapeIDCreator &inSubShapeIDCreator, CollidePointCollector &ioCollector, const ShapeFilter &inShapeFilter);
-
-	/// A fallback version of CollideSoftBodyVertices that uses a raycast to collide the vertices with the shape.
-	static void						sCollideSoftBodyVerticesUsingRayCast(const Shape &inShape, Mat44Arg inCenterOfMassTransform, Vec3Arg inScale, SoftBodyVertex *ioVertices, uint inNumVertices, float inDeltaTime, Vec3Arg inDisplacementDueToGravity, int inCollidingShapeIndex);
 
 private:
 	uint64							mUserData = 0;

@@ -1,10 +1,7 @@
 -- Dependencies
-AssetConverter.dependencyDir = path.getabsolute("Dependencies/", AssetConverter.rootDir)
-
-print("-- Creating Dependencies --")
-
-AssetConverter.dependencyGroup = (AssetConverter.name .. "/Dependencies")
-group (AssetConverter.dependencyGroup)
+Solution.Util.Print("-- Creating Dependencies --")
+Solution.Util.ClearFilter()
+Solution.Util.SetGroup(Solution.DependencyGroup)
 
 local dependencies =
 {
@@ -14,11 +11,9 @@ local dependencies =
 }
 
 for k,v in pairs(dependencies) do
-    filter { }
     include(v)
+    Solution.Util.ClearFilter()
 end
 
-filter { }
-group (AssetConverter.name)
-
-print("-- Finished with Dependencies --\n")
+Solution.Util.SetGroup("")
+Solution.Util.Print("-- Finished with Dependencies --\n")

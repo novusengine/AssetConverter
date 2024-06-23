@@ -31,12 +31,12 @@ std::vector<ClientDBExtractor::ExtractionEntry> ClientDBExtractor::_extractionEn
     { "CinematicSequences.db2",	"A collection of cinematic sequences",	ClientDBExtractor::ExtractCinematicSequence }
 };
 
-StorageRaw ClientDBExtractor::_mapStorage("Map");
-StorageRaw ClientDBExtractor::_liquidObjectStorage("LiquidObject");
-StorageRaw ClientDBExtractor::_liquidTypeStorage("LiquidType");
-StorageRaw ClientDBExtractor::_liquidMaterialStorage("LiquidMaterial");
-StorageRaw ClientDBExtractor::_cinematicCameraStorage("CinematicCamera");
-StorageRaw ClientDBExtractor::_cinematicSequenceStorage("CinematicSequences");
+ClientDB::Storage<ClientDB::Definitions::Map> ClientDBExtractor::mapStorage("Map");
+ClientDB::Storage<ClientDB::Definitions::LiquidObject> ClientDBExtractor::liquidObjectStorage("LiquidObject");
+ClientDB::Storage<ClientDB::Definitions::LiquidType> ClientDBExtractor::liquidTypeStorage("LiquidType");
+ClientDB::Storage<ClientDB::Definitions::LiquidMaterial> ClientDBExtractor::liquidMaterialStorage("LiquidMaterial");
+ClientDB::Storage<ClientDB::Definitions::CinematicCamera> ClientDBExtractor::cinematicCameraStorage("CinematicCamera");
+ClientDB::Storage<ClientDB::Definitions::CinematicSequence> ClientDBExtractor::cinematicSequenceStorage("CinematicSequences");
 
 void ClientDBExtractor::Process()
 {
@@ -46,11 +46,11 @@ void ClientDBExtractor::Process()
 
         if (entry.function())
         {
-            DebugHandler::Print("[ClientDBExtractor] Extracted (\"{0}\" : \"{1}\")", entry.name, entry.description);
+            NC_LOG_INFO("[ClientDBExtractor] Extracted (\"{0}\" : \"{1}\")", entry.name, entry.description);
         }
         else
         {
-            DebugHandler::PrintWarning("[ClientDBExtractor] Failed to extract (\"{0}\" : \"{1}\")", entry.name, entry.description);
+            NC_LOG_WARNING("[ClientDBExtractor] Failed to extract (\"{0}\" : \"{1}\")", entry.name, entry.description);
         }
     }
 }
@@ -117,7 +117,7 @@ void RepopulateFromCopyTable(const DB2::WDC3::Layout& db2, Storage<T>& storage)
         for (u32 j = 0; j < sectionHeader.copyTableCount; j++)
         {
             const DB2::WDC3::Layout::CopyTableEntry& copyTableEntry = section.copyTable[j];
-            storage.Copy(copyTableEntry.oldRowID, copyTableEntry.newRowID);
+            storage.CopyRow(copyTableEntry.oldRowID, copyTableEntry.newRowID);
         }
     }
 }
@@ -134,11 +134,7 @@ bool ClientDBExtractor::ExtractMap()
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-
-    Storage<Definitions::Map> maps = GetMapStorage();
-
-    maps.Clear();
-    maps.Reserve(header.recordCount, 2);
+    mapStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
     {
@@ -155,13 +151,14 @@ bool ClientDBExtractor::ExtractMap()
 
         u32 fileID = cascLoader->GetFileIDFromListFilePath(cascPath);
 
-        bool hasWDTFile = fileID > 0 && cascLoader->FileExistsInCasc(fileID);
+        bool hasWDTFile = fileID > 0 && cascLoader->InCascAndListFile(fileID);
         if (hasWDTFile)
         {
             Definitions::Map map = { };
 
-            map.name = maps.AddString(GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 1));
-            map.internalName = maps.AddString(GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 0));
+            map.id = recordID;
+            map.name = GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 1);
+            map.internalName = GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 0);
 
             const u8 instanceType = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 7);
             map.instanceType = instanceType;
@@ -175,14 +172,14 @@ bool ClientDBExtractor::ExtractMap()
             const u8 maxPlayers = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 18);
             map.maxPlayers = maxPlayers;
 
-            maps.Replace(recordID, map);
+            mapStorage.AddRow(map);
         }
     }
 
-    RepopulateFromCopyTable(layout, maps);
+    RepopulateFromCopyTable(layout, mapStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / maps.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!maps.Save(path))
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / mapStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!mapStorage.Save(path))
         return false;
 
     return true;
@@ -200,11 +197,7 @@ bool ClientDBExtractor::ExtractLiquidObject()
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-
-    Storage<Definitions::LiquidObject> liquidObjects = GetLiquidObjectStorage();
-
-    liquidObjects.Clear();
-    liquidObjects.Reserve(header.recordCount);
+    liquidObjectStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
     {
@@ -216,19 +209,20 @@ bool ClientDBExtractor::ExtractLiquidObject()
             continue;
 
         Definitions::LiquidObject liquidObject;
+        liquidObject.id = recordID;
         liquidObject.flowDirection = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 0);
         liquidObject.flowSpeed = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 1);
         liquidObject.liquidTypeID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 2);
         liquidObject.fishable = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 3);
         liquidObject.reflection = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 4);
 
-        liquidObjects.Replace(recordID, liquidObject);
+        liquidObjectStorage.AddRow(liquidObject);
     }
 
-    RepopulateFromCopyTable(layout, liquidObjects);
+    RepopulateFromCopyTable(layout, liquidObjectStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / liquidObjects.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!liquidObjects.Save(path))
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / liquidObjectStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!liquidObjectStorage.Save(path))
         return false;
 
     return true;
@@ -245,11 +239,7 @@ bool ClientDBExtractor::ExtractLiquidType()
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-
-    Storage<Definitions::LiquidType> liquidTypes = GetLiquidTypeStorage();
-
-    liquidTypes.Clear();
-    liquidTypes.Reserve(header.recordCount, 7);
+    liquidTypeStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
     {
@@ -262,10 +252,11 @@ bool ClientDBExtractor::ExtractLiquidType()
 
         Definitions::LiquidType liquidType;
 
-        liquidType.name = liquidTypes.AddString(GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 0));
+        liquidType.id = recordID;
+        liquidType.name = GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 0);
 
         for (u32 i = 0; i < 6; i++)
-            liquidType.textures[i] = liquidTypes.AddString(GetStringFromArrRecordIndex(layout, db2Parser, db2RecordIndex, 1, i));
+            liquidType.textures[i] = GetStringFromArrRecordIndex(layout, db2Parser, db2RecordIndex, 1, i);
 
         liquidType.flags = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 2);
         liquidType.soundBank = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 3);
@@ -302,13 +293,13 @@ bool ClientDBExtractor::ExtractLiquidType()
         for (u32 i = 0; i < 4; i++)
             liquidType.coefficients[i] = coefficients[i];
 
-        liquidTypes.Replace(recordID, liquidType);
+        liquidTypeStorage.AddRow(liquidType);
     }
 
-    RepopulateFromCopyTable(layout, liquidTypes);
+    RepopulateFromCopyTable(layout, liquidTypeStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / liquidTypes.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!liquidTypes.Save(path))
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / liquidTypeStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!liquidTypeStorage.Save(path))
         return false;
 
     return true;
@@ -326,10 +317,7 @@ bool ClientDBExtractor::ExtractLiquidMaterial()
 
     const DB2::WDC3::Layout::Header& header = layout.header;
 
-    Storage<Definitions::LiquidMaterial> liquidMaterials = GetLiquidMaterialStorage();
-
-    liquidMaterials.Clear();
-    liquidMaterials.Reserve(header.recordCount);
+    liquidMaterialStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
     {
@@ -341,17 +329,17 @@ bool ClientDBExtractor::ExtractLiquidMaterial()
             continue;
 
         Definitions::LiquidMaterial liquidMaterial;
-
+        liquidMaterial.id = recordID;
         liquidMaterial.flags = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 0);
         liquidMaterial.liquidVertexFormat = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 1);
 
-        liquidMaterials.Replace(recordID, liquidMaterial);
+        liquidMaterialStorage.AddRow(liquidMaterial);
     }
 
-    RepopulateFromCopyTable(layout, liquidMaterials);
+    RepopulateFromCopyTable(layout, liquidMaterialStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / liquidMaterials.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!liquidMaterials.Save(path))
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / liquidMaterialStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!liquidMaterialStorage.Save(path))
         return false;
 
     return true;
@@ -370,10 +358,7 @@ bool ClientDBExtractor::ExtractCinematicCamera()
 
     const DB2::WDC3::Layout::Header& header = layout.header;
 
-    Storage<Definitions::CinematicCamera> cinematicCameras = GetCinematicCameraStorage();
-
-    cinematicCameras.Clear();
-    cinematicCameras.Reserve(header.recordCount);
+    cinematicCameraStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
     {
@@ -385,6 +370,7 @@ bool ClientDBExtractor::ExtractCinematicCamera()
             continue;
 
         Definitions::CinematicCamera cinematicCamera;
+        cinematicCamera.id = recordID;
 
         const f32* endPosition = db2Parser.GetFieldPtr<f32>(layout, sectionID, recordID, recordData, 0);
         cinematicCamera.endPosition = CoordinateSpaces::CinematicCameraPosToNovus(vec3(endPosition[0], endPosition[1], endPosition[2]));
@@ -393,7 +379,7 @@ bool ClientDBExtractor::ExtractCinematicCamera()
         cinematicCamera.cameraPath = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 3);
 
         u32 fileID = cinematicCamera.cameraPath;
-        if (cascLoader->FileExistsInCasc(fileID))
+        if (cascLoader->InCascAndListFile(fileID))
         {
             const std::string& fileStr = cascLoader->GetFilePathFromListFileID(cinematicCamera.cameraPath);
 
@@ -407,13 +393,13 @@ bool ClientDBExtractor::ExtractCinematicCamera()
             cinematicCamera.cameraPath = std::numeric_limits<u32>::max();
         }
 
-        cinematicCameras.Replace(recordID, cinematicCamera);
+        cinematicCameraStorage.AddRow(cinematicCamera);
     }
 
-    RepopulateFromCopyTable(layout, cinematicCameras);
+    RepopulateFromCopyTable(layout, cinematicCameraStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / cinematicCameras.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!cinematicCameras.Save(path))
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / cinematicCameraStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!cinematicCameraStorage.Save(path))
         return false;
 
     return true;
@@ -432,10 +418,7 @@ bool ClientDBExtractor::ExtractCinematicSequence()
 
     const DB2::WDC3::Layout::Header& header = layout.header;
 
-    Storage<Definitions::CinematicSequence> cinematicSequences = GetCinematicSequenceStorage();
-
-    cinematicSequences.Clear();
-    cinematicSequences.Reserve(header.recordCount);
+    cinematicSequenceStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
     {
@@ -447,19 +430,19 @@ bool ClientDBExtractor::ExtractCinematicSequence()
             continue;
 
         Definitions::CinematicSequence cinematicSequence;
-
+        cinematicSequence.id = recordID;
         cinematicSequence.soundID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
 
         const u16* cameraIDs = db2Parser.GetFieldPtr<u16>(layout, sectionID, recordID, recordData, 1);
         memcpy(&cinematicSequence.cameraIDs[0], cameraIDs, 8 * sizeof(u16));
 
-        cinematicSequences.Replace(recordID, cinematicSequence);
+        cinematicSequenceStorage.AddRow(cinematicSequence);
     }
 
-    RepopulateFromCopyTable(layout, cinematicSequences);
+    RepopulateFromCopyTable(layout, cinematicSequenceStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / cinematicSequences.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!cinematicSequences.Save(path))
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / cinematicSequenceStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!cinematicSequenceStorage.Save(path))
         return false;
 
     return true;

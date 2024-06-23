@@ -16,11 +16,18 @@
 #include <Jolt/Core/Factory.h>
 #include <Jolt/RegisterTypes.h>
 
+#include <quill/Backend.h>
+
 #include <filesystem>
 namespace fs = std::filesystem;
 
 i32 main()
 {
+    quill::Backend::start();
+
+    auto console_sink = quill::Frontend::create_or_get_sink<quill::ConsoleSink>("console_sink_1");
+    quill::Logger* logger = quill::Frontend::create_or_get_logger("root", std::move(console_sink));
+
     Runtime* runtime = ServiceLocator::SetRuntime(new Runtime());
 
     // Setup Runtime
@@ -60,18 +67,18 @@ i32 main()
 			bool configExists = fs::exists(configPath);
 			if (!configExists)
 			{
-				DebugHandler::PrintFatal("[AssetConverter] Please copy the {0} to this folder.\n\nPress 'Enter' to exit.", CONFIG_NAME);
+				NC_LOG_CRITICAL("[AssetConverter] Please copy the {0} to this folder.\n\nPress 'Enter' to exit.", CONFIG_NAME);
 			}
 
             if (!JsonUtils::LoadFromPathOrCreate(runtime->json, fallbackJson, configPath))
             {
-                DebugHandler::PrintFatal("[AssetConverter] Failed to Load {0} from {1}", CONFIG_NAME, absolutePath.c_str());
+                NC_LOG_CRITICAL("[AssetConverter] Failed to Load {0} from {1}", CONFIG_NAME, absolutePath.c_str());
             }
 
             std::string currentVersion = runtime->json["General"]["Version"];
             if (currentVersion != CONFIG_VERSION)
             {
-                DebugHandler::PrintFatal("[AssetConverter] Attempted to load outdated {0}. (Config Version : {1}, Expected Version : {2})", CONFIG_NAME.c_str(), currentVersion.c_str(), CONFIG_VERSION.c_str());
+                NC_LOG_CRITICAL("[AssetConverter] Attempted to load outdated {0}. (Config Version : {1}, Expected Version : {2})", CONFIG_NAME.c_str(), currentVersion.c_str(), CONFIG_VERSION.c_str());
             }
 
 			runtime->isInDebugMode = runtime->json["General"]["DebugMode"];
@@ -113,56 +120,56 @@ i32 main()
         {
             case CascLoader::Result::Success:
             {
-                DebugHandler::Print("");
+                NC_LOG_INFO("");
 
                 bool isExtractingEnabled = runtime->json["Extraction"]["Enabled"];
                 if (isExtractingEnabled)
                 {
-                    DebugHandler::Print("[AssetConverter] Processing Extractors...");
+                    NC_LOG_INFO("[AssetConverter] Processing Extractors...");
 
                     // DB2
                     bool isDB2Enabled = runtime->json["Extraction"]["ClientDB"]["Enabled"];
                     if (isDB2Enabled)
                     {
-                        DebugHandler::Print("[AssetConverter] Processing ClientDB Extractor...");
+                        NC_LOG_INFO("[AssetConverter] Processing ClientDB Extractor...");
                         ClientDBExtractor::Process();
-                        DebugHandler::Print("[AssetConverter] ClientDB Extractor Finished\n");
+                        NC_LOG_INFO("[AssetConverter] ClientDB Extractor Finished\n");
                     }
 
                     // Map
                     bool isMapEnabled = runtime->json["Extraction"]["Map"]["Enabled"];
                     if (isMapEnabled)
                     {
-                        DebugHandler::Print("[AssetConverter] Processing Map Extractor...");
+                        NC_LOG_INFO("[AssetConverter] Processing Map Extractor...");
                         MapExtractor::Process();
-                        DebugHandler::Print("[AssetConverter] Map Extractor Finished\n");
+                        NC_LOG_INFO("[AssetConverter] Map Extractor Finished\n");
                     }
 
                     // Map Object
                     bool isMapObjectEnabled = runtime->json["Extraction"]["MapObject"]["Enabled"];
                     if (isMapObjectEnabled)
                     {
-                        DebugHandler::Print("[AssetConverter] Processing MapObject Extractor...");
+                        NC_LOG_INFO("[AssetConverter] Processing MapObject Extractor...");
                         MapObjectExtractor::Process();
-                        DebugHandler::Print("[AssetConverter] MapObject Extractor Finished\n");
+                        NC_LOG_INFO("[AssetConverter] MapObject Extractor Finished\n");
                     }
 
                     // Complex Model
                     bool isComplexModelEnabled = runtime->json["Extraction"]["ComplexModel"]["Enabled"];
                     if (isComplexModelEnabled)
                     {
-                        DebugHandler::Print("[AssetConverter] Processing ComplexModel Extractor...");
+                        NC_LOG_INFO("[AssetConverter] Processing ComplexModel Extractor...");
                         ComplexModelExtractor::Process();
-                        DebugHandler::Print("[AssetConverter] ComplexModel Extractor Finished\n");
+                        NC_LOG_INFO("[AssetConverter] ComplexModel Extractor Finished\n");
                     }
 
                     // Texture
                     bool isTextureEnabled = runtime->json["Extraction"]["Texture"]["Enabled"];
                     if (isTextureEnabled)
                     {
-                        DebugHandler::Print("[AssetConverter] Processing Texture Extractor...");
+                        NC_LOG_INFO("[AssetConverter] Processing Texture Extractor...");
                         TextureExtractor::Process();
-                        DebugHandler::Print("[AssetConverter] Texture Extractor Finished\n");
+                        NC_LOG_INFO("[AssetConverter] Texture Extractor Finished\n");
                     }
                 }
 
@@ -172,38 +179,38 @@ i32 main()
 
             case CascLoader::Result::MissingCasc:
             {
-                DebugHandler::PrintError("[CascLoader] Could not load Casc. Failed to find Installation");
+                NC_LOG_ERROR("[CascLoader] Could not load Casc. Failed to find Installation");
                 break;
             }
 
             case CascLoader::Result::MissingListFile:
             {
-                DebugHandler::PrintError("[CascLoader] Could not load Casc. Failed to find Listfile");
+                NC_LOG_ERROR("[CascLoader] Could not load Casc. Failed to find Listfile");
                 break;
             }
 
             case CascLoader::Result::MissingLocale:
             {
-                DebugHandler::PrintError("[CascLoader] Could not load Casc. Invalid Locale");
+                NC_LOG_ERROR("[CascLoader] Could not load Casc. Invalid Locale");
                 break;
             }
 
             case CascLoader::Result::AlreadyInitialized:
             {
-                DebugHandler::PrintError("[CascLoader] Could not load Casc. Already Initialized.");
+                NC_LOG_ERROR("[CascLoader] Could not load Casc. Already Initialized.");
                 break;
             }
 
             default:
             {
-                DebugHandler::PrintError("[CascLoader] Could not load Casc. Unknown Result.");
+                NC_LOG_ERROR("[CascLoader] Could not load Casc. Unknown Result.");
                 break;
             }
         }
     }
 
-    DebugHandler::Print("");
-    DebugHandler::Print("Finished... Press 'Enter' to exit");
+    NC_LOG_INFO("");
+    NC_LOG_INFO("Finished... Press 'Enter' to exit");
     std::cin.get();
 
     return 0;

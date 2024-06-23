@@ -1,6 +1,7 @@
+local dep = Solution.Util.CreateDepTable("Cuttlefish", { "glm" })
+
 local function SetupFreeImage()
-    local basePath = path.getabsolute("Cuttlefish/Cuttlefish", AssetConverter.dependencyDir)
-    local freeImageRootDir = path.getabsolute("lib/FreeImage", basePath)
+    local freeImageRootDir = dep.Path .. "/" .. dep.Name .. "/lib/FreeImage"
 
     local files =
     {
@@ -584,8 +585,7 @@ local function SetupFreeImage()
 end
 
 local function SetupSquish()
-    local basePath = path.getabsolute("Cuttlefish/Cuttlefish", AssetConverter.dependencyDir)
-    local squishRootDir = path.getabsolute("lib/libsquish", basePath)
+    local squishRootDir = dep.Path .. "/" .. dep.Name .. "/lib/libsquish"
 
     local files =
     {
@@ -629,8 +629,7 @@ local function SetupSquish()
 end
 
 local function SetupBc7encRdo()
-    local basePath = path.getabsolute("Cuttlefish/Cuttlefish", AssetConverter.dependencyDir)
-    local bc7encRdoRootDir = path.getabsolute("lib/bc7enc_rdo", basePath)
+    local bc7encRdoRootDir = dep.Path .. "/" .. dep.Name .. "/lib/bc7enc_rdo"
 
     local files =
     {
@@ -654,8 +653,7 @@ local function SetupBc7encRdo()
 end
 
 local function SetupCompressonator()
-    local basePath = path.getabsolute("Cuttlefish/Cuttlefish", AssetConverter.dependencyDir)
-    local compressonatorRootDir = path.getabsolute("lib/compressonator", basePath)
+    local compressonatorRootDir = dep.Path .. "/" .. dep.Name .. "/lib/compressonator"
 
     local files =
     {
@@ -680,16 +678,13 @@ local function SetupCompressonator()
     return files, includes, defines
 end
 
-local function SetupLib()
-    local basePath = path.getabsolute("Cuttlefish/Cuttlefish", AssetConverter.dependencyDir)
-    local dependencies = { "glm" }
-    local defines = { "_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS", "_SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS" }
+Solution.Util.CreateStaticLib(dep.Name, Solution.Projects.Current.BinDir, dep.Dependencies, function()
+    Solution.Util.SetLanguage("C++")
+    Solution.Util.SetCppDialect(17)
 
-    local cppVersion = 17
-    ProjectTemplate("Cuttlefish", "StaticLib", nil, AssetConverter.binDir, dependencies, defines, cppVersion)
-
-    local sourceDir = path.getabsolute("lib/src", basePath)
-    local includeDir = path.getabsolute("lib/include", basePath)
+    local basePath = dep.Path .. "/" .. dep.Name
+    local sourceDir = basePath .. "/lib/src"
+    local includeDir = basePath .. "/lib/include"
 
     local files =
     {
@@ -704,19 +699,18 @@ local function SetupLib()
         sourceDir .. "/**.cpp",
     }
 
+    local defines = { "_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS", "_SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS", "CUTTLEFISH_BUILD", "CUTTLEFISH_ISPC=0" }
     local freeImageFiles, freeImageIncludes, freeImageDefines = SetupFreeImage()
     local squishFiles, squishIncludes, squishDefines = SetupSquish()
     local bc7encRdoFiles, bc7encRdoIncludes, bc7encRdoDefines = SetupBc7encRdo()
     local compressonatorFiles, compressonatorIncludes, compressonatorDefines = SetupCompressonator()
-    AddFiles({ files, freeImageFiles, squishFiles, bc7encRdoFiles, compressonatorFiles })
 
-    AddIncludeDirs( { includeDir, freeImageIncludes, squishIncludes, bc7encRdoIncludes, compressonatorIncludes } )
+    Solution.Util.SetFiles({ files, freeImageFiles, squishFiles, bc7encRdoFiles, compressonatorFiles })
+    Solution.Util.SetIncludes({ includeDir, freeImageIncludes, squishIncludes, bc7encRdoIncludes, compressonatorIncludes })
+    Solution.Util.SetDefines({ defines, freeImageDefines, squishDefines, bc7encRdoDefines, compressonatorDefines })
 
-    local defines = { "CUTTLEFISH_BUILD", "CUTTLEFISH_ISPC=0" }
-    AddDefines({ defines, freeImageDefines, squishDefines, bc7encRdoDefines, compressonatorDefines })
-
-    local exportFile = path.getabsolute("cmake/templates/NoExport.h", basePath)
-    local copyToExportFilePath = path.getabsolute("lib/include/cuttlefish/Export.h", basePath)
+    local exportFile = basePath .. "/templates/NoExport.h"
+    local copyToExportFilePath = basePath .. "/lib/include/cuttlefish/Export.h"
     ok, err = os.copyfile(exportFile, copyToExportFilePath)
 
     if ok == nil then
@@ -724,17 +718,16 @@ local function SetupLib()
     end
 
     warnings "Off"
-end
-SetupLib()
+end)
 
-local function Include()
-    local basePath = path.getabsolute("Cuttlefish/Cuttlefish", AssetConverter.dependencyDir)
-    local sourceDir = path.getabsolute("lib/src", basePath)
-    local includeDir = path.getabsolute("lib/include", basePath)
+Solution.Util.CreateDep(dep.NameLow, dep.Dependencies, function() 
+    local basePath = dep.Path .. "/" .. dep.Name
+    local sourceDir = basePath .. "/lib/src"
+    local includeDir = basePath .. "/lib/include"
 
-    AddIncludeDirs({ sourceDir, includeDir })
-
-    AddDefines("CUTTLEFISH_BUILD")
-    AddLinks("Cuttlefish")
-end
-CreateDep("cuttlefish", Include)
+    Solution.Util.SetIncludes({ sourceDir, includeDir })
+    Solution.Util.SetLinks(dep.Name)
+    
+    local defines = { "CUTTLEFISH_BUILD" }
+    Solution.Util.SetDefines(defines)
+end)

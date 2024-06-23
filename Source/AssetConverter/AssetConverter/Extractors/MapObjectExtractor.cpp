@@ -83,7 +83,7 @@ void MapObjectExtractor::Process()
     u16 progressFlags = 0;
 
     u32 numRootFiles = static_cast<u32>(fileListQueue.size_approx());
-    DebugHandler::Print("[MapObject Extractor] Processing {0} files", numRootFiles);
+    NC_LOG_INFO("[MapObject Extractor] Processing {0} files", numRootFiles);
 
     enki::TaskSet convertWMOTask(numRootFiles, [&runtime, &cascLoader, &fileListQueue, &numProcessedFiles, &progressFlags, &printMutex, numRootFiles](enki::TaskSetPartition range, uint32_t threadNum)
     {
@@ -128,6 +128,9 @@ void MapObjectExtractor::Process()
                     {
                         u32 textureFileID = material.textureID[j];
                         if (textureFileID == std::numeric_limits<u32>().max())
+                            continue;
+
+                        if (!cascLoader->InCascAndListFile(textureFileID))
                             continue;
 
                         const std::string& cascFilePath = cascLoader->GetFilePathFromListFileID(textureFileID);
@@ -185,11 +188,11 @@ void MapObjectExtractor::Process()
             {
                 if (result)
                 {
-                    DebugHandler::Print("[MapObject Extractor] Extracted {0}", fileListEntry.fileName);
+                    NC_LOG_INFO("[MapObject Extractor] Extracted {0}", fileListEntry.fileName);
                 }
                 else
                 {
-                    DebugHandler::PrintWarning("[MapObject Extractor] Failed to extract {0}", fileListEntry.fileName);
+                    NC_LOG_WARNING("[MapObject Extractor] Failed to extract {0}", fileListEntry.fileName);
                 }
             }
 
@@ -205,7 +208,7 @@ void MapObjectExtractor::Process()
                 if (reportStatus)
                 {
                     progressFlags |= bitMask;
-                    DebugHandler::Print("[MapObject Extractor] Progress Status ({0:.0f}% / 100%)", progress * 10.0f);
+                    NC_LOG_INFO("[MapObject Extractor] Progress Status ({0:.0f}% / 100%)", progress * 10.0f);
                 }
             }
         }

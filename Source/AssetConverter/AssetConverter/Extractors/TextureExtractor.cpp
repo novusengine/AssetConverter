@@ -43,7 +43,7 @@ void TextureExtractor::Process()
         if (!StringUtils::EndsWith(itr.first, ".blp"))
             continue;
     
-        if (!cascLoader->FileExistsInCasc(itr.second))
+        if (!cascLoader->InCascAndListFile(itr.second))
             continue;
     
         std::string pathStr = itr.first;
@@ -68,7 +68,7 @@ void TextureExtractor::Process()
     u32 numFiles = static_cast<u32>(fileList.size());
     std::atomic<u32> numFilesConverted = 0;
     std::atomic<u16> progressFlags = 0;
-    DebugHandler::Print("[Texture Extractor] Processing {0} files", numFiles);
+    NC_LOG_INFO("[Texture Extractor] Processing {0} files", numFiles);
 
     enki::TaskSet convertTexturesTask(numFiles, [&](enki::TaskSetPartition range, uint32_t threadNum)
     {
@@ -92,7 +92,7 @@ void TextureExtractor::Process()
             if (reportStatus)
             {
                 progressFlags |= bitMask;
-                DebugHandler::Print("[Texture Extractor] Progress Status ({0:.0f}% / 100%)", progress * 10.0f);
+                NC_LOG_INFO("[Texture Extractor] Progress Status ({0:.0f}% / 100%)", progress * 10.0f);
             }
         }
     });

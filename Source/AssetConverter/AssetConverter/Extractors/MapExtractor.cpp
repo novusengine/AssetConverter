@@ -57,43 +57,41 @@ void MapExtractor::Process()
     Runtime* runtime = ServiceLocator::GetRuntime();
     CascLoader* cascLoader = ServiceLocator::GetCascLoader();
 
-    Storage<Definitions::Map> maps = ClientDBExtractor::GetMapStorage();
+    Storage<Definitions::Map>& maps = ClientDBExtractor::mapStorage;
 
     bool createChunkAlphaMaps = runtime->json["Extraction"]["Map"]["BlendMaps"];
 
     u32 numMapEntries = maps.Count();
-    DebugHandler::Print("[Map Extractor] Processing {0} maps", numMapEntries);
+    NC_LOG_INFO("[Map Extractor] Processing {0} maps", numMapEntries);
 
-    for (const Definitions::Map& map : maps)
+    maps.Each([&](const Storage<Definitions::Map>* storage, const Definitions::Map* map)
     {
-        const std::string& mapInternalName = maps.GetString(map.internalName);
-
         static char formatBuffer[512] = { 0 };
-        i32 length = StringUtils::FormatString(&formatBuffer[0], 512, "world/maps/%s/%s.wdt", mapInternalName.c_str(), mapInternalName.c_str());
+        i32 length = StringUtils::FormatString(&formatBuffer[0], 512, "world/maps/%s/%s.wdt", map->internalName.c_str(), map->internalName.c_str());
         if (length <= 0)
-            continue;
+            return;
 
         std::string wdtPath(&formatBuffer[0], length);
         std::transform(wdtPath.begin(), wdtPath.end(), wdtPath.begin(), [](unsigned char c) { return std::tolower(c); });
 
         u32 wdtFileID = cascLoader->GetFileIDFromListFilePath(wdtPath.data());
         if (!wdtFileID)
-            continue;
+            return;
 
         std::shared_ptr<Bytebuffer> fileWDT = cascLoader->GetFileByID(wdtFileID);
         if (!fileWDT)
-            continue;
+            return;
 
         Adt::WdtParser wdtParser = { };
 
         Adt::Wdt wdt = { };
         if (!wdtParser.TryParse(fileWDT, wdt))
         {
-            DebugHandler::PrintWarning("[Map Extractor] Failed to extract {0} (Corrupt WDT)", mapInternalName);
-            continue;
+            NC_LOG_WARNING("[Map Extractor] Failed to extract {0} (Corrupt WDT)", map->internalName);
+            return;
         }
 
-        std::filesystem::create_directories(runtime->paths.map / mapInternalName);
+        std::filesystem::create_directories(runtime->paths.map / map->internalName);
 
         Map::MapHeader mapHeader = { };
         mapHeader.flags.UseMapObjectAsBase = wdt.mphd.flags.UseGlobalMapObj;
@@ -101,17 +99,17 @@ void MapExtractor::Process()
         if (mapHeader.flags.UseMapObjectAsBase)
         {
             if (!wdt.modf.data.size())
-                continue;
+                return;
 
             const Adt::MODF::PlacementInfo& placementInfo = wdt.modf.data[0];
             if (!placementInfo.flags.EntryIsFiledataID || placementInfo.fileID == 0)
-                continue;
+                return;
 
             // Skip map if placement file doesn't exist
-            if (!cascLoader->FileExistsInCasc(placementInfo.fileID))
+            if (!cascLoader->InCascAndListFile(placementInfo.fileID))
             {
-                DebugHandler::PrintError("Skipped map {0} because placement file doesn't exist", mapInternalName);
-                continue;
+                NC_LOG_ERROR("Skipped map {0} because placement file doesn't exist", map->internalName);
+                return;
             }
 
             Terrain::Placement& placement = mapHeader.placement;
@@ -136,9 +134,9 @@ void MapExtractor::Process()
         }
         else
         {
-            std::filesystem::create_directories(runtime->paths.textureBlendMap / mapInternalName);
+            std::filesystem::create_directories(runtime->paths.textureBlendMap / map->internalName);
 
-            enki::TaskSet convertMapTask(Terrain::CHUNK_NUM_PER_MAP, [&runtime, &cascLoader, &map, &mapInternalName, &wdt, createChunkAlphaMaps](enki::TaskSetPartition range, uint32_t threadNum)
+            enki::TaskSet convertMapTask(Terrain::CHUNK_NUM_PER_MAP, [&runtime, &cascLoader, &map, &wdt, createChunkAlphaMaps](enki::TaskSetPartition range, uint32_t threadNum)
             {
                 Adt::Parser adtParser = { };
 
@@ -164,15 +162,15 @@ void MapExtractor::Process()
 
                     Adt::Layout adt = { };
                     {
-                        adt.mapID = map.GetID();
+                        adt.mapID = map->id;
                         adt.chunkID = chunkID;
                     }
 
                     Adt::Parser::Context context = { };
 
-                    auto liquidObjects = ClientDBExtractor::GetLiquidObjectStorage();
-                    auto liquidTypes = ClientDBExtractor::GetLiquidTypeStorage();
-                    auto liquidMaterials = ClientDBExtractor::GetLiquidMaterialStorage();
+                    auto& liquidObjects = ClientDBExtractor::liquidObjectStorage;
+                    auto& liquidTypes = ClientDBExtractor::liquidTypeStorage;
+                    auto& liquidMaterials = ClientDBExtractor::liquidMaterialStorage;
 
                     context.liquidObjects = &liquidObjects;
                     context.liquidTypes = &liquidTypes;
@@ -195,9 +193,9 @@ void MapExtractor::Process()
                                 placementInfo.nameHash == std::numeric_limits<u32>().max())
                                 continue;
 
-                            if (!cascLoader->FileExistsInCasc(placementInfo.nameHash))
+                            if (!cascLoader->InCascAndListFile(placementInfo.nameHash))
                             {
-                                DebugHandler::PrintError("[Map Extractor] Skipped map object placement because file doesn't exist");
+                                NC_LOG_ERROR("[Map Extractor] Skipped map object placement because file doesn't exist");
                                 continue;
                             }
 
@@ -216,9 +214,9 @@ void MapExtractor::Process()
                                 placementInfo.nameHash == std::numeric_limits<u32>().max())
                                 continue;
 
-                            if (!cascLoader->FileExistsInCasc(placementInfo.nameHash))
+                            if (!cascLoader->InCascAndListFile(placementInfo.nameHash))
                             {
-                                DebugHandler::PrintError("Skipped complex model placement because file doesn't exist");
+                                NC_LOG_ERROR("Skipped complex model placement because file doesn't exist");
                                 continue;
                             }
 
@@ -331,7 +329,7 @@ void MapExtractor::Process()
                             }
                         }
 
-                        std::string localChunkBlendMapPath = "blendmaps/" + mapInternalName + "/" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".dds";
+                        std::string localChunkBlendMapPath = "blendmaps/" + map->internalName + "/" + map->internalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + ".dds";
                         chunk.chunkAlphaMapTextureHash = (StringUtils::fnv1a_32(localChunkBlendMapPath.c_str(), localChunkBlendMapPath.length()) * isAlphaMapSet) + (std::numeric_limits<u32>().max() * !isAlphaMapSet);
 
                         if (createChunkAlphaMaps && isAlphaMapSet)
@@ -435,7 +433,7 @@ void MapExtractor::Process()
                             }
                         }
 
-                        std::string localChunkPath = mapInternalName + "/" + mapInternalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + Map::CHUNK_FILE_EXTENSION;
+                        std::string localChunkPath = map->internalName + "/" + map->internalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + Map::CHUNK_FILE_EXTENSION;
                         std::string chunkOutputPath = (runtime->paths.map / localChunkPath).string();
                         chunk.Save(chunkOutputPath);
                     }
@@ -447,14 +445,14 @@ void MapExtractor::Process()
             runtime->scheduler.WaitforTask(&convertMapTask);
         }
 
-        std::string mapHeaderPath = runtime->paths.map.string() + "/" + mapInternalName + "/" + mapInternalName + Map::HEADER_FILE_EXTENSION;
+        std::string mapHeaderPath = runtime->paths.map.string() + "/" + map->internalName + "/" + map->internalName + Map::HEADER_FILE_EXTENSION;
         if (mapHeader.Save(mapHeaderPath))
         {
-            DebugHandler::Print("[Map Extractor] Extracted {0}", mapInternalName);
+            NC_LOG_INFO("[Map Extractor] Extracted {0}", map->internalName);
         }
         else
         {
-            DebugHandler::PrintWarning("[Map Extractor] Failed to extract {0}", mapInternalName);
+            NC_LOG_WARNING("[Map Extractor] Failed to extract {0}", map->internalName);
         }
-    }
+    });
 }

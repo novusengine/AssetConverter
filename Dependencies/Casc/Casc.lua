@@ -1,12 +1,12 @@
-local function SetupLib()
-    local basePath = path.getabsolute("Casc/", AssetConverter.dependencyDir)
-    local dependencies = { }
-    local defines = { "_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS", "_SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS" }
+local dep = Solution.Util.CreateDepTable("Casc", {})
 
-    ProjectTemplate("Casc", "StaticLib", nil, AssetConverter.binDir, dependencies, defines)
+Solution.Util.CreateStaticLib(dep.Name, Solution.Projects.Current.BinDir, dep.Dependencies, function()
+    local defines = { "_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS", "_SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS", "D_7ZIP_ST", "DBZ_STRICT_ANSI", "CASCLIB_NO_AUTO_LINK_LIBRARY" }
 
-    local sourceDir = path.getabsolute("Casc/src/", basePath)
-    local includeDir = sourceDir
+    Solution.Util.SetLanguage("C++")
+    Solution.Util.SetCppDialect(20)
+
+    local sourceDir = dep.Path .. "/" .. dep.Name
     local files =
     {
         -- Header Files
@@ -68,22 +68,20 @@ local function SetupLib()
         sourceDir .. "/zlib/inftrees.c",
         sourceDir .. "/zlib/zutil.c",
     }
-    AddFiles(files)
 
-    AddIncludeDirs(includeDir)
+    Solution.Util.SetFiles(files)
+    Solution.Util.SetIncludes({ dep.Path, sourceDir })
+    Solution.Util.SetDefines(defines)
 
-    AddDefines({"D_7ZIP_ST", "DBZ_STRICT_ANSI", "CASCLIB_NO_AUTO_LINK_LIBRARY"})
+    Solution.Util.SetFilter("platforms:Win64", function()
+        Solution.Util.SetLinks({ "wininet" })
+    end)
+end)
 
-    AddLinks("wininet")
-end
-SetupLib()
-
-local function Include()
-    local basePath = path.getabsolute("Casc/", AssetConverter.dependencyDir)
-    local includeDir = path.getabsolute("Casc/src/", basePath)
-
-    AddIncludeDirs(includeDir)
-    AddDefines({"CASCLIB_NO_AUTO_LINK_LIBRARY"})
-    AddLinks("Casc")
-end
-CreateDep("casc", Include)
+Solution.Util.CreateDep(dep.NameLow, dep.Dependencies, function()
+    Solution.Util.SetIncludes(dep.Path)
+    Solution.Util.SetLinks(dep.Name)
+    
+    local defines = { "CASCLIB_NO_AUTO_LINK_LIBRARY", "CASCLIB_NODEBUG" }
+    Solution.Util.SetDefines(defines)
+end)

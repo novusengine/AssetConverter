@@ -69,7 +69,7 @@ CascLoader::Result CascLoader::Load()
     args.Size = sizeof(CASC_OPEN_STORAGE_ARGS);
 
     args.szLocalPath = pathString.c_str();
-    args.szCodeName = "wow_classic";
+    args.szCodeName = "wow_classic_era";
     args.szRegion = "eu";
     args.dwLocaleMask = locale;
     args.PfnProgressCallback = LoadingCallback;
@@ -77,13 +77,13 @@ CascLoader::Result CascLoader::Load()
     if (!CascOpenStorageEx(nullptr, &args, false, &_storageHandle))
         return Result::MissingCasc;
 
-    DebugHandler::Print("[CascLoader] : Loading ListFile");
+    NC_LOG_INFO("[CascLoader] : Loading ListFile");
 
     if (!_listFile.Initialize())
         return Result::MissingListFile;
 
     u32 numFileEntries = _listFile.GetNumEntries();
-    DebugHandler::Print("[CascLoader] : Loaded ListFile with {0} entries", numFileEntries);
+    NC_LOG_INFO("[CascLoader] : Loaded ListFile with {0} entries", numFileEntries);
 
     return Result::Success;
 }
@@ -145,9 +145,34 @@ bool CascLoader::FileExistsInCasc(u32 fileID)
     return true;
 }
 
-bool CascLoader::LoadingCallback(void* ptrUserParam, LPCSTR szWork, LPCSTR szObject, DWORD currentValue, DWORD totalValue)
+static LPCSTR GetProgressMessageAsText(CASC_PROGRESS_MSG Message)
 {
-    if (StringUtils::BeginsWith(szWork, "Loading index files"))
+    switch (Message)
+    {
+        case CascProgressLoadingFile:
+            return "Loading file:";
+
+        case CascProgressLoadingManifest:
+            return "Loading manifest:";
+
+        case CascProgressDownloadingFile:
+            return "Downloading file:";
+
+        case CascProgressLoadingIndexes:
+            return "Loading index files";
+
+        case CascProgressDownloadingArchiveIndexes:
+            return "Downloading archive indexes";
+
+        default:
+            assert(false);
+            return NULL;
+    }
+}
+
+bool CascLoader::LoadingCallback(void* ptrUserParam, CASC_PROGRESS_MSG message, LPCSTR szObject, DWORD currentValue, DWORD totalValue)
+{
+    if (message == CascProgressLoadingIndexes)
     {
         if (_isLoadingIndexFiles)
             return false;
@@ -155,7 +180,14 @@ bool CascLoader::LoadingCallback(void* ptrUserParam, LPCSTR szWork, LPCSTR szObj
         _isLoadingIndexFiles = true;
     }
 
-    DebugHandler::Print("[CascLoader] : {0}", szWork);
+    if (szObject)
+    {
+        NC_LOG_INFO("[CascLoader] : {0} {1}", GetProgressMessageAsText(message), szObject);
+    }
+    else
+    {
+        NC_LOG_INFO("[CascLoader] : {0}", GetProgressMessageAsText(message));
+    }
     return false;
 }
 
