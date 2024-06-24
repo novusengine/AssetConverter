@@ -362,6 +362,17 @@ void MapExtractor::Process()
 
                             uvec2 triangleComponentOffsets = uvec2(0, 0);
 
+                            auto IsHoleVertex = [](u32 vertexId, u64 holes) -> bool
+                            {
+                                const u32 blockRow = vertexId / Terrain::CELL_GRID_ROW_SIZE;
+                                const u32 blockVertexId = vertexId % Terrain::CELL_GRID_ROW_SIZE;
+                                u32 bitIndex = (blockRow * 8) + (blockVertexId - 9);
+
+                                bool isValidVertexIDForHole = blockVertexId >= 9;
+                                const bool isVertexAHole = isValidVertexIDForHole && (holes & (1ull << bitIndex)) != 0;
+                                return isVertexAHole;
+                            };
+
                             for (u32 cellID = 0; cellID < Terrain::CHUNK_NUM_CELLS; cellID++)
                             {
                                 const Map::Cell& cell = chunk.cells[cellID];
@@ -411,6 +422,11 @@ void MapExtractor::Process()
                                     u32 vertexID1 = (cellID * Terrain::CELL_TOTAL_GRID_SIZE) + patchVertexIDs[4];
                                     u32 vertexID2 = (cellID * Terrain::CELL_TOTAL_GRID_SIZE) + patchVertexIDs[triangleComponentOffsets.x * 2 + triangleComponentOffsets.y];
                                     u32 vertexID3 = (cellID * Terrain::CELL_TOTAL_GRID_SIZE) + patchVertexIDs[(!triangleComponentOffsets.y) * 2 + triangleComponentOffsets.x];
+
+                                    u32 localCenterVertexID = patchVertexIDs[4];
+                                    if (IsHoleVertex(localCenterVertexID, cell.hole))
+                                        continue;
+
                                     triangleList.push_back({ vertexID3, vertexID2, vertexID1 });
                                 }
                             }
