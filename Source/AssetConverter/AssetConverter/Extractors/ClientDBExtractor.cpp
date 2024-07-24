@@ -23,12 +23,18 @@ using namespace ClientDB;
 
 std::vector<ClientDBExtractor::ExtractionEntry> ClientDBExtractor::_extractionEntries =
 {
-    { "Map.db2",				"A collection of all maps",				ClientDBExtractor::ExtractMap },
-    { "LiquidObject.db2",		"A collection of liquid objects",		ClientDBExtractor::ExtractLiquidObject },
-    { "LiquidType.db2",			"A collection of liquid types",			ClientDBExtractor::ExtractLiquidType },
-    { "LiquidMaterial.db2",		"A collection of liquid materials",		ClientDBExtractor::ExtractLiquidMaterial },
-    { "CinematicCamera.db2",	"A collection of cinematic cameras",	ClientDBExtractor::ExtractCinematicCamera },
-    { "CinematicSequences.db2",	"A collection of cinematic sequences",	ClientDBExtractor::ExtractCinematicSequence }
+    { "TextureFileData.db2",            "A collection of Texture File Data",                ClientDBExtractor::ExtractTextureFileData },
+    { "Map.db2",				        "A collection of all maps",				            ClientDBExtractor::ExtractMap },
+    { "LiquidObject.db2",		        "A collection of liquid objects",		            ClientDBExtractor::ExtractLiquidObject },
+    { "LiquidType.db2",			        "A collection of liquid types",			            ClientDBExtractor::ExtractLiquidType },
+    { "LiquidMaterial.db2",		        "A collection of liquid materials",		            ClientDBExtractor::ExtractLiquidMaterial },
+    { "CinematicCamera.db2",	        "A collection of cinematic cameras",	            ClientDBExtractor::ExtractCinematicCamera },
+    { "CinematicSequences.db2",	        "A collection of cinematic sequences",	            ClientDBExtractor::ExtractCinematicSequence },
+    { "AnimationData.db2",	            "A collection of Animation Data",	                ClientDBExtractor::ExtractAnimationData },
+    { "CreatureDisplayInfo.db2",        "A collection of Creature Display Info Data",	    ClientDBExtractor::ExtractCreatureDisplayInfo },
+    { "CreatureDisplayInfoExtra.db2",   "A collection of Creature Display Info Extra Data", ClientDBExtractor::ExtractCreatureDisplayInfoExtra },
+    { "CreatureModelData.db2",          "A collection of Creature Model Data",              ClientDBExtractor::ExtractCreatureModelData },
+    { "CharSection.db2",                "A collection of Char Section Data",                ClientDBExtractor::ExtractCharSection }
 };
 
 ClientDB::Storage<ClientDB::Definitions::Map> ClientDBExtractor::mapStorage("Map");
@@ -37,6 +43,14 @@ ClientDB::Storage<ClientDB::Definitions::LiquidType> ClientDBExtractor::liquidTy
 ClientDB::Storage<ClientDB::Definitions::LiquidMaterial> ClientDBExtractor::liquidMaterialStorage("LiquidMaterial");
 ClientDB::Storage<ClientDB::Definitions::CinematicCamera> ClientDBExtractor::cinematicCameraStorage("CinematicCamera");
 ClientDB::Storage<ClientDB::Definitions::CinematicSequence> ClientDBExtractor::cinematicSequenceStorage("CinematicSequences");
+ClientDB::Storage<ClientDB::Definitions::AnimationData> ClientDBExtractor::animationDataStorage("AnimationData");
+ClientDB::Storage<ClientDB::Definitions::CreatureDisplayInfo> ClientDBExtractor::creatureDisplayInfoStorage("CreatureDisplayInfo");
+ClientDB::Storage<ClientDB::Definitions::CreatureDisplayInfoExtra> ClientDBExtractor::creatureDisplayInfoExtraStorage("CreatureDisplayInfoExtra");
+ClientDB::Storage<ClientDB::Definitions::CreatureModelData> ClientDBExtractor::creatureModelDataStorage("CreatureModelData");
+ClientDB::Storage<ClientDB::Definitions::TextureFileData> ClientDBExtractor::textureFileDataStorage("TextureFileData");
+ClientDB::Storage<ClientDB::Definitions::CharSection> ClientDBExtractor::charSectionStorage("CharSection");
+
+robin_hood::unordered_map<u32, u32> ClientDBExtractor::materialResourcesIDToTextureFileDataEntry;
 
 void ClientDBExtractor::Process()
 {
@@ -443,6 +457,403 @@ bool ClientDBExtractor::ExtractCinematicSequence()
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / cinematicSequenceStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!cinematicSequenceStorage.Save(path))
+        return false;
+
+    return true;
+}
+
+bool ClientDBExtractor::ExtractAnimationData()
+{
+    CascLoader* cascLoader = ServiceLocator::GetCascLoader();
+
+    DB2::WDC3::Layout layout = { };
+    DB2::WDC3::Parser db2Parser = { };
+
+    std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByListFilePath("dbfilesclient/animationdata.db2");
+    if (!buffer || !db2Parser.TryParse(buffer, layout))
+        return false;
+
+    const DB2::WDC3::Layout::Header& header = layout.header;
+
+    animationDataStorage.Reserve(header.recordCount);
+
+    for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
+    {
+        u32 sectionID = 0;
+        u32 recordID = 0;
+        u8* recordData = nullptr;
+
+        if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
+            continue;
+
+        Definitions::AnimationData animationData;
+        animationData.id = recordID;
+        animationData.fallback = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 0);
+        animationData.behaviorTier = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 1);
+        animationData.behaviorID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2);
+
+        const u32* flags = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 3);
+        memcpy(&animationData.flags[0], flags, 2 * sizeof(u32));
+
+        animationDataStorage.AddRow(animationData);
+    }
+
+    RepopulateFromCopyTable(layout, animationDataStorage);
+
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / animationDataStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!animationDataStorage.Save(path))
+        return false;
+
+    return true;
+}
+
+bool ClientDBExtractor::ExtractCreatureDisplayInfo()
+{
+    CascLoader* cascLoader = ServiceLocator::GetCascLoader();
+
+    DB2::WDC3::Layout layout = { };
+    DB2::WDC3::Parser db2Parser = { };
+
+    std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByListFilePath("dbfilesclient/creaturedisplayinfo.db2");
+    if (!buffer || !db2Parser.TryParse(buffer, layout))
+        return false;
+
+    const DB2::WDC3::Layout::Header& header = layout.header;
+
+    creatureDisplayInfoStorage.Reserve(header.recordCount);
+
+    for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
+    {
+        u32 sectionID = 0;
+        u32 recordID = 0;
+        u8* recordData = nullptr;
+
+        if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
+            continue;
+
+        Definitions::CreatureDisplayInfo creatureDisplayInfo;
+        creatureDisplayInfo.id = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
+        creatureDisplayInfo.modelID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 1);
+        creatureDisplayInfo.soundID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 2);
+        creatureDisplayInfo.sizeClass = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 3);
+        creatureDisplayInfo.creatureModelScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 4);
+        creatureDisplayInfo.creatureModelAlpha = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 5);
+        creatureDisplayInfo.bloodID = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 6);
+        creatureDisplayInfo.extendedDisplayInfoID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 7);
+        creatureDisplayInfo.npcSoundID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 8);
+        creatureDisplayInfo.particleColorID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 9);
+        creatureDisplayInfo.portraitCreatureDisplayInfoID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 10);
+        creatureDisplayInfo.portraitTextureFileDataID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 11);
+        creatureDisplayInfo.objectEffectPackageID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 12);
+        creatureDisplayInfo.animReplacementSetID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 13);
+        creatureDisplayInfo.flags = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 14);
+        creatureDisplayInfo.stateSpellVisualKitID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 15);
+        creatureDisplayInfo.playerOverrideScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 16);
+        creatureDisplayInfo.petInstanceScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 17);
+        creatureDisplayInfo.unarmedWeaponType = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 18);
+        creatureDisplayInfo.mountPoofSpellVisualKitID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 19);
+        creatureDisplayInfo.dissolveEffectID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 20);
+        creatureDisplayInfo.gender = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 21);
+        creatureDisplayInfo.dissolveOutEffectID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 22);
+        creatureDisplayInfo.creatureModelMinLod = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 23);
+
+        const u32* textureVariations = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 24);
+        memcpy(&creatureDisplayInfo.textureVariations[0], textureVariations, 4 * sizeof(u32));
+
+        for (i32 i = 0; i < 4; i++)
+        {
+            i32 textureVariationFileID = creatureDisplayInfo.textureVariations[i];
+
+            if (textureVariationFileID == 0)
+                continue;
+
+            if (!cascLoader->InCascAndListFile(textureVariationFileID))
+                continue;
+
+            const std::string& fileStr = cascLoader->GetFilePathFromListFileID(textureVariationFileID);
+
+            fs::path filePath = fs::path(fileStr).replace_extension("dds");
+            u32 nameHash = StringUtils::fnv1a_32(filePath.string().c_str(), filePath.string().size());
+
+            creatureDisplayInfo.textureVariations[i] = nameHash;
+        }
+
+        creatureDisplayInfoStorage.AddRow(creatureDisplayInfo);
+    }
+
+    RepopulateFromCopyTable(layout, creatureDisplayInfoStorage);
+
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / creatureDisplayInfoStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!creatureDisplayInfoStorage.Save(path))
+        return false;
+
+    return true;
+}
+
+bool ClientDBExtractor::ExtractCreatureDisplayInfoExtra()
+{
+    CascLoader* cascLoader = ServiceLocator::GetCascLoader();
+
+    DB2::WDC3::Layout layout = { };
+    DB2::WDC3::Parser db2Parser = { };
+
+    std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByListFilePath("dbfilesclient/creaturedisplayinfoextra.db2");
+    if (!buffer || !db2Parser.TryParse(buffer, layout))
+        return false;
+
+    const DB2::WDC3::Layout::Header& header = layout.header;
+
+    creatureDisplayInfoExtraStorage.Reserve(header.recordCount);
+
+    for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
+    {
+        u32 sectionID = 0;
+        u32 recordID = 0;
+        u8* recordData = nullptr;
+
+        if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
+            continue;
+
+        Definitions::CreatureDisplayInfoExtra creatureDisplayInfoExtra;
+        creatureDisplayInfoExtra.id = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
+        creatureDisplayInfoExtra.displayRaceID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 1);
+        creatureDisplayInfoExtra.displaySexID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 2);
+        creatureDisplayInfoExtra.displayClassID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 3);
+        creatureDisplayInfoExtra.skinID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 4);
+        creatureDisplayInfoExtra.faceID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 5);
+        creatureDisplayInfoExtra.hairStyleID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 6);
+        creatureDisplayInfoExtra.hairColorID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 7);
+        creatureDisplayInfoExtra.facialHairID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 8);
+        creatureDisplayInfoExtra.flags = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 9);
+        creatureDisplayInfoExtra.bakedTextureHash = std::numeric_limits<u32>::max();
+        u32 bakedMaterialResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 10);
+
+        const u8* customDisplayOptions = db2Parser.GetFieldPtr<u8>(layout, sectionID, recordID, recordData, 12);
+        memcpy(&creatureDisplayInfoExtra.customDisplayOptions[0], customDisplayOptions, 3 * sizeof(u8));
+
+        if (materialResourcesIDToTextureFileDataEntry.contains(bakedMaterialResourcesID))
+        {
+            u32 textureFileDataID = materialResourcesIDToTextureFileDataEntry[bakedMaterialResourcesID];
+            
+            if (ClientDB::Definitions::TextureFileData* textureFileData = textureFileDataStorage.GetRow(textureFileDataID))
+            {
+                creatureDisplayInfoExtra.bakedTextureHash = textureFileData->textureHash;
+            }
+        }
+
+        creatureDisplayInfoExtraStorage.AddRow(creatureDisplayInfoExtra);
+    }
+
+    RepopulateFromCopyTable(layout, creatureDisplayInfoExtraStorage);
+
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / creatureDisplayInfoExtraStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!creatureDisplayInfoExtraStorage.Save(path))
+        return false;
+
+    return true;
+}
+
+bool ClientDBExtractor::ExtractCreatureModelData()
+{
+    CascLoader* cascLoader = ServiceLocator::GetCascLoader();
+
+    DB2::WDC3::Layout layout = { };
+    DB2::WDC3::Parser db2Parser = { };
+
+    std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByListFilePath("dbfilesclient/creaturemodeldata.db2");
+    if (!buffer || !db2Parser.TryParse(buffer, layout))
+        return false;
+
+    const DB2::WDC3::Layout::Header& header = layout.header;
+
+    creatureModelDataStorage.Reserve(header.recordCount);
+
+    for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
+    {
+        u32 sectionID = 0;
+        u32 recordID = 0;
+        u8* recordData = nullptr;
+
+        if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
+            continue;
+
+        Definitions::CreatureModelData creatureModelData;
+        creatureModelData.id = recordID;
+        creatureModelData.boundingBox = *db2Parser.GetFieldPtr<Geometry::AABoundingBox>(layout, sectionID, recordID, recordData, 0);
+        creatureModelData.flags = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1);
+        creatureModelData.modelHash = std::numeric_limits<u32>::max();
+        u32 fileID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2);
+        creatureModelData.bloodID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 3);
+        creatureModelData.footprintTextureID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 4);
+        creatureModelData.footprintTextureLength = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 5);
+        creatureModelData.footprintTextureWidth = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 6);
+        creatureModelData.footprintParticleScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 7);
+        creatureModelData.foleyMaterialID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 8);
+        creatureModelData.footstepCameraEffectID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 9);
+        creatureModelData.deathThudCameraEffectID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 10);
+        creatureModelData.soundID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 11);
+        creatureModelData.sizeClass = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 12);
+        creatureModelData.collisionWidth = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 13);
+        creatureModelData.collisionHeight = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 14);
+        creatureModelData.worldEffectScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 15);
+        creatureModelData.creatureGeosetDataID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 16);
+        creatureModelData.hoverHeight = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 17);
+        creatureModelData.attachedEffectScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 18);
+        creatureModelData.modelScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 19);
+        creatureModelData.missileCollisionRadius = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 20);
+        creatureModelData.missileCollisionPush = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 21);
+        creatureModelData.missileCollisionRaise = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 22);
+        creatureModelData.mountHeight = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 23);
+        creatureModelData.overrideLootEffectScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 24);
+        creatureModelData.overrideNameScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 25);
+        creatureModelData.overrideSelectionRadius = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 26);
+        creatureModelData.tamedPetBaseScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 27);
+
+        if (cascLoader->InCascAndListFile(fileID))
+        {
+            const std::string& fileStr = cascLoader->GetFilePathFromListFileID(fileID);
+
+            fs::path filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
+            u32 nameHash = StringUtils::fnv1a_32(filePath.string().c_str(), filePath.string().size());
+
+            creatureModelData.modelHash = nameHash;
+        }
+
+        creatureModelDataStorage.AddRow(creatureModelData);
+    }
+
+    RepopulateFromCopyTable(layout, creatureModelDataStorage);
+
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / creatureModelDataStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!creatureModelDataStorage.Save(path))
+        return false;
+
+    return true;
+}
+
+bool ClientDBExtractor::ExtractTextureFileData()
+{
+    CascLoader* cascLoader = ServiceLocator::GetCascLoader();
+
+    DB2::WDC3::Layout layout = { };
+    DB2::WDC3::Parser db2Parser = { };
+
+    std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByListFilePath("dbfilesclient/texturefiledata.db2");
+    if (!buffer || !db2Parser.TryParse(buffer, layout))
+        return false;
+
+    const DB2::WDC3::Layout::Header& header = layout.header;
+
+    textureFileDataStorage.Reserve(header.recordCount);
+
+    for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
+    {
+        u32 sectionID = 0;
+        u32 recordID = 0;
+        u8* recordData = nullptr;
+
+        if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
+            continue;
+
+        Definitions::TextureFileData textureFileData;
+        textureFileData.id = db2RecordIndex;
+        
+        u32 textureFileID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
+        textureFileData.usage = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 1);
+        textureFileData.materialResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2);
+
+        if (cascLoader->InCascAndListFile(textureFileID))
+        {
+            const std::string& fileStr = cascLoader->GetFilePathFromListFileID(textureFileID);
+
+            fs::path filePath = fs::path(fileStr).replace_extension("dds");
+            u32 nameHash = StringUtils::fnv1a_32(filePath.string().c_str(), filePath.string().size());
+
+            textureFileData.textureHash = nameHash;
+        }
+        else
+        {
+            textureFileData.textureHash = std::numeric_limits<u32>::max();
+        }
+
+        if (!materialResourcesIDToTextureFileDataEntry.contains(textureFileData.materialResourcesID))
+        {
+            materialResourcesIDToTextureFileDataEntry[textureFileData.materialResourcesID] = textureFileData.id;
+        }
+
+        textureFileDataStorage.AddRow(textureFileData);
+    }
+
+    RepopulateFromCopyTable(layout, textureFileDataStorage);
+
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / textureFileDataStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!textureFileDataStorage.Save(path))
+        return false;
+
+    return true;
+}
+
+bool ClientDBExtractor::ExtractCharSection()
+{
+    CascLoader* cascLoader = ServiceLocator::GetCascLoader();
+
+    DB2::WDC3::Layout layout = { };
+    DB2::WDC3::Parser db2Parser = { };
+
+    std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByListFilePath("dbfilesclient/charsections.db2");
+    if (!buffer || !db2Parser.TryParse(buffer, layout))
+        return false;
+
+    const DB2::WDC3::Layout::Header& header = layout.header;
+
+    charSectionStorage.Reserve(header.recordCount);
+
+    for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
+    {
+        u32 sectionID = 0;
+        u32 recordID = 0;
+        u8* recordData = nullptr;
+
+        if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
+            continue;
+
+        Definitions::CharSection charSection;
+        charSection.id = recordID;
+        charSection.raceID = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 0);
+        charSection.sexID = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 1);
+        charSection.baseSection = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 2);
+        charSection.varationIndex = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 3);
+        charSection.colorIndex = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 4);
+        charSection.flags = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 5);
+
+        const u32* materialResourcesIDs = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 6);
+
+        for (u32 i = 0; i < 3; i++)
+        {
+            charSection.textureHashes[i] = std::numeric_limits<u32>::max();
+
+            u32 materialResourcesID = materialResourcesIDs[i];
+            if (materialResourcesID == 0)
+                continue;
+
+            if (!materialResourcesIDToTextureFileDataEntry.contains(materialResourcesID))
+                continue;
+
+            u32 textureFileDataID = materialResourcesIDToTextureFileDataEntry[materialResourcesID];
+            ClientDB::Definitions::TextureFileData* textureFileData = textureFileDataStorage.GetRow(textureFileDataID);
+            if (!textureFileData)
+                continue;
+        
+            charSection.textureHashes[i] = textureFileData->textureHash;
+        }
+
+        charSectionStorage.AddRow(charSection);
+    }
+
+    RepopulateFromCopyTable(layout, charSectionStorage);
+
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / charSectionStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!charSectionStorage.Save(path))
         return false;
 
     return true;
