@@ -709,7 +709,7 @@ Solution.Util.CreateStaticLib(dep.Name, Solution.Projects.Current.BinDir, dep.De
     Solution.Util.SetIncludes({ includeDir, freeImageIncludes, squishIncludes, bc7encRdoIncludes, compressonatorIncludes })
     Solution.Util.SetDefines({ defines, freeImageDefines, squishDefines, bc7encRdoDefines, compressonatorDefines })
 
-    local exportFile = basePath .. "/templates/NoExport.h"
+    local exportFile = basePath .. "/cmake/templates/NoExport.h"
     local copyToExportFilePath = basePath .. "/lib/include/cuttlefish/Export.h"
     ok, err = os.copyfile(exportFile, copyToExportFilePath)
 
