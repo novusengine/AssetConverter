@@ -9,6 +9,8 @@ jobs:
     
     strategy:
       fail-fast: false
+      matrix:
+        build-type: [Release, Debug]
       
     steps:
     - uses: actions/checkout@v4
@@ -26,4 +28,11 @@ jobs:
 
     - name: Build
       run: |
-        msbuild /m /p:Configuration=Debug Build/AssetConverter.sln
+        msbuild /m /p:Configuration=${{ matrix.build-type }} Build/AssetConverter.sln
+
+    - name: Upload AssetConverter artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AssetConverter_${{ matrix.build-type }}
+        path: |
+          Build/Bin/AssetConverter/${{ matrix.build-type }}/AssetConverter.exe
