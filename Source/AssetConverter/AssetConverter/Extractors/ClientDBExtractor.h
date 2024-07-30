@@ -25,6 +25,10 @@ private:
     static bool ExtractCreatureModelData();
     static bool ExtractTextureFileData();
     static bool ExtractCharSection();
+    static bool ExtractLight();
+    static bool ExtractLightParams();
+    static bool ExtractLightData();
+    static bool ExtractLightSkybox();
 
 public:
     static ClientDB::Storage<ClientDB::Definitions::Map> mapStorage;
@@ -39,6 +43,10 @@ public:
     static ClientDB::Storage<ClientDB::Definitions::CreatureModelData> creatureModelDataStorage;
     static ClientDB::Storage<ClientDB::Definitions::TextureFileData> textureFileDataStorage;
     static ClientDB::Storage<ClientDB::Definitions::CharSection> charSectionStorage;
+    static ClientDB::Storage<ClientDB::Definitions::Light> lightStorage;
+    static ClientDB::Storage<ClientDB::Definitions::LightParam> lightParamsStorage;
+    static ClientDB::Storage<ClientDB::Definitions::LightData> lightDataStorage;
+    static ClientDB::Storage<ClientDB::Definitions::LightSkybox> lightSkyboxStorage;
 
     static robin_hood::unordered_map<u32, u32> materialResourcesIDToTextureFileDataEntry;
 

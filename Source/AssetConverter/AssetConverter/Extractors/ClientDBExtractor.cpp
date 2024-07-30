@@ -34,7 +34,11 @@ std::vector<ClientDBExtractor::ExtractionEntry> ClientDBExtractor::_extractionEn
     { "CreatureDisplayInfo.db2",        "A collection of Creature Display Info Data",	    ClientDBExtractor::ExtractCreatureDisplayInfo },
     { "CreatureDisplayInfoExtra.db2",   "A collection of Creature Display Info Extra Data", ClientDBExtractor::ExtractCreatureDisplayInfoExtra },
     { "CreatureModelData.db2",          "A collection of Creature Model Data",              ClientDBExtractor::ExtractCreatureModelData },
-    { "CharSection.db2",                "A collection of Char Section Data",                ClientDBExtractor::ExtractCharSection }
+    { "CharSection.db2",                "A collection of Char Section Data",                ClientDBExtractor::ExtractCharSection },
+    { "Light.db2",                      "A collection of Light Data",                       ClientDBExtractor::ExtractLight },
+    { "LightParams.db2",                "A collection of Light Parameter Data",             ClientDBExtractor::ExtractLightParams },
+    { "LightData.db2",                  "A collection of Light Data Data",                  ClientDBExtractor::ExtractLightData },
+    { "LightSkybox.db2",                "A collection of Light Skybox Data",                ClientDBExtractor::ExtractLightSkybox }
 };
 
 ClientDB::Storage<ClientDB::Definitions::Map> ClientDBExtractor::mapStorage("Map");
@@ -49,6 +53,10 @@ ClientDB::Storage<ClientDB::Definitions::CreatureDisplayInfoExtra> ClientDBExtra
 ClientDB::Storage<ClientDB::Definitions::CreatureModelData> ClientDBExtractor::creatureModelDataStorage("CreatureModelData");
 ClientDB::Storage<ClientDB::Definitions::TextureFileData> ClientDBExtractor::textureFileDataStorage("TextureFileData");
 ClientDB::Storage<ClientDB::Definitions::CharSection> ClientDBExtractor::charSectionStorage("CharSection");
+ClientDB::Storage<ClientDB::Definitions::Light> ClientDBExtractor::lightStorage("Light");
+ClientDB::Storage<ClientDB::Definitions::LightParam> ClientDBExtractor::lightParamsStorage("LightParams");
+ClientDB::Storage<ClientDB::Definitions::LightData> ClientDBExtractor::lightDataStorage("LightData");
+ClientDB::Storage<ClientDB::Definitions::LightSkybox> ClientDBExtractor::lightSkyboxStorage("LightSkybox");
 
 robin_hood::unordered_map<u32, u32> ClientDBExtractor::materialResourcesIDToTextureFileDataEntry;
 
@@ -854,6 +862,234 @@ bool ClientDBExtractor::ExtractCharSection()
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / charSectionStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!charSectionStorage.Save(path))
+        return false;
+
+    return true;
+}
+
+bool ClientDBExtractor::ExtractLight()
+{
+    CascLoader* cascLoader = ServiceLocator::GetCascLoader();
+
+    DB2::WDC3::Layout layout = { };
+    DB2::WDC3::Parser db2Parser = { };
+
+    std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByListFilePath("dbfilesclient/light.db2");
+    if (!buffer || !db2Parser.TryParse(buffer, layout))
+        return false;
+
+    const DB2::WDC3::Layout::Header& header = layout.header;
+
+    lightStorage.Reserve(header.recordCount);
+
+    for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
+    {
+        u32 sectionID = 0;
+        u32 recordID = 0;
+        u8* recordData = nullptr;
+
+        if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
+            continue;
+
+        Definitions::Light light;
+        light.id = recordID;
+        light.mapID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 3);
+
+        vec3 position = *db2Parser.GetFieldPtr<vec3>(layout, sectionID, recordID, recordData, 0);
+        light.position = CoordinateSpaces::TerrainPosToNovus(position);
+        light.fallOff.x = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 1);
+        light.fallOff.y = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 2);
+
+        const u16* lightParamIDs = db2Parser.GetFieldPtr<u16>(layout, sectionID, recordID, recordData, 4);
+        memcpy(&light.lightParamsID[0], lightParamIDs, 8 * sizeof(u16));
+        lightStorage.AddRow(light);
+    }
+
+    RepopulateFromCopyTable(layout, lightStorage);
+
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / lightStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!lightStorage.Save(path))
+        return false;
+
+    return true;
+}
+
+bool ClientDBExtractor::ExtractLightParams()
+{
+    CascLoader* cascLoader = ServiceLocator::GetCascLoader();
+
+    DB2::WDC3::Layout layout = { };
+    DB2::WDC3::Parser db2Parser = { };
+
+    std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByListFilePath("dbfilesclient/lightparams.db2");
+    if (!buffer || !db2Parser.TryParse(buffer, layout))
+        return false;
+
+    const DB2::WDC3::Layout::Header& header = layout.header;
+
+    lightParamsStorage.Reserve(header.recordCount);
+
+    for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
+    {
+        u32 sectionID = 0;
+        u32 recordID = 0;
+        u8* recordData = nullptr;
+
+        if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
+            continue;
+
+        Definitions::LightParam lightParam;
+        lightParam.id = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1);
+        lightParam.flags.highlightSky = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 2);
+        lightParam.lightSkyboxID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 3);
+        lightParam.glow = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 5);
+        lightParam.waterShallowAlpha = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 6);
+        lightParam.waterDeepAlpha = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 7);
+        lightParam.oceanShallowAlpha = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 8);
+        lightParam.oceanDeepAlpha = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 9);
+        lightParamsStorage.AddRow(lightParam);
+    }
+
+    RepopulateFromCopyTable(layout, lightParamsStorage);
+
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / lightParamsStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!lightParamsStorage.Save(path))
+        return false;
+
+    return true;
+}
+
+bool ClientDBExtractor::ExtractLightData()
+{
+    CascLoader* cascLoader = ServiceLocator::GetCascLoader();
+
+    DB2::WDC3::Layout layout = { };
+    DB2::WDC3::Parser db2Parser = { };
+
+    std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByListFilePath("dbfilesclient/lightdata.db2");
+    if (!buffer || !db2Parser.TryParse(buffer, layout))
+        return false;
+
+    const DB2::WDC3::Layout::Header& header = layout.header;
+
+    lightDataStorage.Reserve(header.recordCount);
+
+    for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
+    {
+        u32 sectionID = 0;
+        u32 recordID = 0;
+        u8* recordData = nullptr;
+
+        if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
+            continue;
+
+        Definitions::LightData lightData;
+        lightData.id = recordID;
+        lightData.lightParamID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 0);
+        u16 timestamp = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 1);
+        lightData.timestamp = static_cast<u32>(timestamp) * 30;
+        lightData.diffuseColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2);
+        lightData.ambientColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 3);
+        lightData.skyTopColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 4);
+        lightData.skyMiddleColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 5);
+        lightData.skyBand1Color = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 6);
+        lightData.skyBand2Color = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 7);
+        lightData.skySmogColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 8);
+        lightData.skyFogColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 9);
+        lightData.sunColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 10);
+        lightData.sunFogColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 38);
+        lightData.sunFogStrength = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 39);
+        lightData.sunFogAngle = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 29);
+        lightData.cloudSunColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 11);
+        lightData.cloudEmissiveColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 12);
+        lightData.cloudLayer1AmbientColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 13);
+        lightData.cloudLayer2AmbientColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 14);
+        lightData.oceanShallowColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 15);
+        lightData.oceanDeepColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 16);
+        lightData.riverShallowColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 17);
+        lightData.riverDeepColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 18);
+        lightData.shadowColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 19);
+        lightData.fogEnd = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 20) / 36;
+        lightData.fogScaler = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 21);
+        lightData.fogDensity = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 22);
+        lightData.cloudDensity = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 30);
+        lightData.fogHeightColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1);
+        lightData.endFogColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 35);
+        lightData.endFogHeightColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 41);
+
+        lightDataStorage.AddRow(lightData);
+    }
+
+    RepopulateFromCopyTable(layout, lightDataStorage);
+
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / lightDataStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!lightDataStorage.Save(path))
+        return false;
+
+    return true;
+}
+
+bool ClientDBExtractor::ExtractLightSkybox()
+{
+    CascLoader* cascLoader = ServiceLocator::GetCascLoader();
+
+    DB2::WDC3::Layout layout = { };
+    DB2::WDC3::Parser db2Parser = { };
+
+    std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByListFilePath("dbfilesclient/lightskybox.db2");
+    if (!buffer || !db2Parser.TryParse(buffer, layout))
+        return false;
+
+    const DB2::WDC3::Layout::Header& header = layout.header;
+
+    lightSkyboxStorage.Reserve(header.recordCount);
+
+    for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
+    {
+        u32 sectionID = 0;
+        u32 recordID = 0;
+        u8* recordData = nullptr;
+
+        if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
+            continue;
+
+        Definitions::LightSkybox lightSkybox;
+        lightSkybox.id = recordID;
+
+        u32 nameHash = std::numeric_limits<u32>::max();
+        
+        u32 fileID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2);
+        if (fileID == 0)
+        {
+            std::string modelPath = GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 0);
+
+            if (cascLoader->ListFileContainsPath(modelPath))
+            {
+                if (!modelPath.empty())
+                {
+                    nameHash = StringUtils::fnv1a_32(modelPath.c_str(), modelPath.size());
+                }
+            }
+        }
+        else
+        {
+            if (cascLoader->InCascAndListFile(fileID))
+            {
+                const std::string& fileStr = cascLoader->GetFilePathFromListFileID(fileID);
+
+                fs::path filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
+                nameHash = StringUtils::fnv1a_32(filePath.string().c_str(), filePath.string().size());
+            }
+        }
+
+        lightSkybox.modelHash = nameHash;
+        lightSkyboxStorage.AddRow(lightSkybox);
+    }
+
+    RepopulateFromCopyTable(layout, lightSkyboxStorage);
+
+    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / lightSkyboxStorage.GetName()).replace_extension(ClientDB::FILE_EXTENSION).string();
+    if (!lightSkyboxStorage.Save(path))
         return false;
 
     return true;
