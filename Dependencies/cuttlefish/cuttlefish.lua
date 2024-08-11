@@ -680,7 +680,7 @@ end
 
 Solution.Util.CreateStaticLib(dep.Name, Solution.Projects.Current.BinDir, dep.Dependencies, function()
     Solution.Util.SetLanguage("C++")
-    Solution.Util.SetCppDialect(17)
+    Solution.Util.SetCppDialect(14)
 
     local basePath = dep.Path .. "/" .. dep.Name
     local sourceDir = basePath .. "/lib/src"
