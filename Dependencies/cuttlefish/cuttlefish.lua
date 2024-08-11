@@ -576,10 +576,15 @@ local function SetupFreeImage()
         "DISABLE_PERF_MEASUREMENT=1",
         "PNG_ARM_NEON_OPT=0",
         "FREEIMAGE_LIB",
-		"_LARGEFILE64_SOURCE=1",
-        "OPJ_STATIC",
-        "LIBRAW_NODLL"
+		"_LARGEFILE64_SOURCE=1"
     }
+    
+    if os.target() == "windows" then
+        table.insert(defines, "OPJ_STATIC")
+        table.insert(defines, "LIBRAW_NODLL")
+    else
+        table.insert(defines, "__ANSI__")
+    end
 
     return files, includes, defines
 end
