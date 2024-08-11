@@ -1,8 +1,8 @@
 #include "MapObjectExtractor.h"
-#include "AssetConverter/Runtime.h"
-#include "AssetConverter/Casc/CascLoader.h"
-#include "AssetConverter/Util/JoltStream.h"
-#include "AssetConverter/Util/ServiceLocator.h"
+#include "AssetConverter-App/Runtime.h"
+#include "AssetConverter-App/Casc/CascLoader.h"
+#include "AssetConverter-App/Util/JoltStream.h"
+#include "AssetConverter-App/Util/ServiceLocator.h"
 
 #include <Base/Container/ConcurrentQueue.h>
 #include <Base/Util/DebugHandler.h>

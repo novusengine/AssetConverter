@@ -10,7 +10,7 @@ end
 Solution.Util.SetGroup(Solution.ModuleGroup)
 local modules =
 {
-    "AssetConverter/AssetConverter.lua",
+    "AssetConverter-App/AssetConverter-App.lua",
 }
 
 for _, v in pairs(modules) do

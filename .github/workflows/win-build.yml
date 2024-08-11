@@ -35,4 +35,4 @@ jobs:
       with:
         name: AssetConverter_${{ matrix.build-type }}
         path: |
-          Build/Bin/AssetConverter/${{ matrix.build-type }}/AssetConverter.exe
+          Build/Bin/AssetConverter/${{ matrix.build-type }}/AssetConverter-App.exe

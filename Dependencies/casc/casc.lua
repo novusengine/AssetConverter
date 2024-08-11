@@ -1,7 +1,7 @@
 local dep = Solution.Util.CreateDepTable("Casc", {})
 
 Solution.Util.CreateStaticLib(dep.Name, Solution.Projects.Current.BinDir, dep.Dependencies, function()
-    local defines = { "_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS", "_SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS", "D_7ZIP_ST", "DBZ_STRICT_ANSI", "CASCLIB_NO_AUTO_LINK_LIBRARY" }
+    local defines = { "_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS", "_SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS", "D_7ZIP_ST", "DBZ_STRICT_ANSI", "CASCLIB_NO_AUTO_LINK_LIBRARY", "CASCLIB_NODEBUG" }
 
     Solution.Util.SetLanguage("C++")
     Solution.Util.SetCppDialect(20)
