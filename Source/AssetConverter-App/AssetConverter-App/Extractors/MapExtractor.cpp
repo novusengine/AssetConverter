@@ -1,10 +1,10 @@
 #include "MapExtractor.h"
-#include "AssetConverter/Runtime.h"
-#include "AssetConverter/Blp/BlpConvert.h"
-#include "AssetConverter/Casc/CascLoader.h"
-#include "AssetConverter/Extractors/ClientDBExtractor.h"
-#include "AssetConverter/Util/JoltStream.h"
-#include "AssetConverter/Util/ServiceLocator.h"
+#include "AssetConverter-App/Runtime.h"
+#include "AssetConverter-App/Blp/BlpConvert.h"
+#include "AssetConverter-App/Casc/CascLoader.h"
+#include "AssetConverter-App/Extractors/ClientDBExtractor.h"
+#include "AssetConverter-App/Util/JoltStream.h"
+#include "AssetConverter-App/Util/ServiceLocator.h"
 
 #include <Base/Util/StringUtils.h>
 #include <Base/Util/DebugHandler.h>

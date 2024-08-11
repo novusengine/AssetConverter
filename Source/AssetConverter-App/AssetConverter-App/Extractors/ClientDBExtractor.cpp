@@ -1,7 +1,7 @@
 #include "ClientDBExtractor.h"
-#include "AssetConverter/Runtime.h"
-#include "AssetConverter/Casc/CascLoader.h"
-#include "AssetConverter/Util/ServiceLocator.h"
+#include "AssetConverter-App/Runtime.h"
+#include "AssetConverter-App/Casc/CascLoader.h"
+#include "AssetConverter-App/Util/ServiceLocator.h"
 
 #include <Base/Container/StringTable.h>
 #include <Base/Memory/FileWriter.h>
