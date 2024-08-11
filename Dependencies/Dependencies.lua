@@ -5,8 +5,8 @@ Solution.Util.SetGroup(Solution.DependencyGroup)
 
 local dependencies =
 {
-    "Casc/Casc.lua",
-    "Cuttlefish/Cuttlefish.lua",
+    "casc/casc.lua",
+    "cuttlefish/cuttlefish.lua",
     "jolt/jolt.lua",
 }
 
