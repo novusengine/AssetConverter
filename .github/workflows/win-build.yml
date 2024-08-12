@@ -28,7 +28,7 @@ jobs:
 
     - name: Build
       run: |
-        msbuild /m /p:Configuration=${{ matrix.build-type }} Build/AssetConverter.sln
+        msbuild /m /p:LinkIncremental=false /p:Configuration=${{ matrix.build-type }} Build/AssetConverter.sln
 
     - name: Upload AssetConverter artifact
       uses: actions/upload-artifact@v4
