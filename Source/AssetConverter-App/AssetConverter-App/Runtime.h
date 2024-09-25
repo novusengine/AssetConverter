@@ -12,6 +12,7 @@ public:
     {
         fs::path executable;
         fs::path data;
+        fs::path audio;
         fs::path clientDB;
         fs::path texture;
         fs::path textureBlendMap;

@@ -34,6 +34,7 @@ void CascListFile::ParseListFile()
     _fileIDToPath.reserve(2000000);
     _filePathToID.reserve(2000000);
 
+    _audioFiles.reserve(65535);
     _m2Files.reserve(65535);
     _wmoFiles.reserve(32768);
     _blpFiles.reserve(262144);
@@ -96,7 +97,11 @@ void CascListFile::ParseListFile()
         _fileIDToPath[fileID] = filePath;
         _filePathToID[filePath] = fileID;
 
-        if (StringUtils::EndsWith(filePath, ".m2") || StringUtils::EndsWith(filePath, ".mdx"))
+        if (StringUtils::EndsWith(filePath, ".mp3") || StringUtils::EndsWith(filePath, ".wav") ||StringUtils::EndsWith(filePath, ".ogg") || StringUtils::EndsWith(filePath, ".wav.ogg"))
+        {
+            _audioFiles.push_back(fileID);
+        }
+        else if (StringUtils::EndsWith(filePath, ".m2") || StringUtils::EndsWith(filePath, ".mdx"))
         {
             _m2Files.push_back(fileID);
         }

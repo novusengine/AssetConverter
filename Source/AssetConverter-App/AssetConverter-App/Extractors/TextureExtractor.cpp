@@ -78,7 +78,7 @@ void TextureExtractor::Process()
 
             std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByID(fileListEntry.fileID);
             if (!buffer)
-                return;
+                continue;
 
             bool generateMips = !fileListEntry.flags.isInterfaceFile;
             bool useCompression = fileListEntry.flags.useCompression;
