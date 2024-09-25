@@ -1,6 +1,7 @@
 #include "Runtime.h"
 #include "Blp/BlpConvert.h"
 #include "Casc/CascLoader.h"
+#include "Extractors/AudioExtractor.h"
 #include "Extractors/ClientDBExtractor.h"
 #include "Extractors/MapExtractor.h"
 #include "Extractors/MapObjectExtractor.h"
@@ -38,6 +39,7 @@ i32 main()
 
             paths.executable = fs::current_path();
             paths.data = paths.executable / "Data";
+            paths.audio = paths.data / "Audio";
             paths.clientDB = paths.data / "ClientDB";
             paths.texture = paths.data / "Texture";
             paths.textureBlendMap = paths.texture / "blendmaps";
@@ -46,6 +48,7 @@ i32 main()
             paths.complexModel = paths.data / "ComplexModel";
 
             fs::create_directories(paths.data);
+            fs::create_directories(paths.audio);
             fs::create_directories(paths.clientDB);
             fs::create_directories(paths.texture);
             fs::create_directories(paths.textureBlendMap);
@@ -126,6 +129,15 @@ i32 main()
                 if (isExtractingEnabled)
                 {
                     NC_LOG_INFO("[AssetConverter] Processing Extractors...");
+
+                    // Audio
+                    bool isAudioEnabled = runtime->json["Extraction"]["Audio"]["Enabled"];
+                    if (isAudioEnabled)
+                    {
+                        NC_LOG_INFO("[AssetConverter] Processing Audio Extractor...");
+                        AudioExtractor::Process();
+                        NC_LOG_INFO("[AssetConverter] Audio Extractor Finished\n");
+                    }
 
                     // DB2
                     bool isDB2Enabled = runtime->json["Extraction"]["ClientDB"]["Enabled"];
