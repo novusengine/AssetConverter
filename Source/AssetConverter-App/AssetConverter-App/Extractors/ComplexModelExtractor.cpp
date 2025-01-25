@@ -44,35 +44,35 @@ void ComplexModelExtractor::Process()
         for (u32 index = range.start; index < range.end; index++)
         {
             u32 m2FileID = m2FileIDs[index];
-
+    
             switch (m2FileID)
             {
                 case 5779493:
                 case 5779495:
                     continue;
-
+    
                 default:
                     break;
             }
-
+    
             if (!cascLoader->InCascAndListFile(m2FileID))
                 continue;
-
+    
             std::string pathStr = cascLoader->GetFilePathFromListFileID(m2FileID);
             std::transform(pathStr.begin(), pathStr.end(), pathStr.begin(), ::tolower);
-
+    
             fs::path outputPath = (runtime->paths.complexModel / pathStr).replace_extension(Model::FILE_EXTENSION);
             fs::create_directories(outputPath.parent_path());
-
+    
             FileListEntry fileListEntry;
             fileListEntry.fileID = m2FileID;
             fileListEntry.fileName = outputPath.filename().string();
             fileListEntry.path = outputPath.string();
-
+    
             fileListQueue.enqueue(fileListEntry);
         }
     });
-
+    
     runtime->scheduler.AddTaskSetToPipe(&processM2List);
     runtime->scheduler.WaitforTask(&processM2List);
 
