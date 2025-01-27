@@ -13,52 +13,59 @@ public:
     static void Process();
 
 private:
-    static bool ExtractMap();
-    static bool ExtractLiquidObject();
-    static bool ExtractLiquidType();
-    static bool ExtractLiquidMaterial();
-    static bool ExtractCinematicCamera();
-    static bool ExtractCinematicSequence();
-    static bool ExtractAnimationData();
-    static bool ExtractCreatureDisplayInfo();
-    static bool ExtractCreatureDisplayInfoExtra();
-    static bool ExtractCreatureModelData();
-    static bool ExtractTextureFileData();
-    static bool ExtractCharSection();
-    static bool ExtractLight();
-    static bool ExtractLightParams();
-    static bool ExtractLightData();
-    static bool ExtractLightSkybox();
+    static bool ExtractModelFileData(const std::string& name);
+    static bool ExtractTextureFileData(const std::string& name);
+    static bool ExtractMap(const std::string& name);
+    static bool ExtractLiquidObject(const std::string& name);
+    static bool ExtractLiquidType(const std::string& name);
+    static bool ExtractLiquidMaterial(const std::string& name);
+    static bool ExtractCinematicCamera(const std::string& name);
+    static bool ExtractCinematicSequence(const std::string& name);
+    static bool ExtractAnimationData(const std::string& name);
+    static bool ExtractCreatureDisplayInfo(const std::string& name);
+    static bool ExtractCreatureDisplayInfoExtra(const std::string& name);
+    static bool ExtractCreatureModelData(const std::string& name);
+    static bool ExtractItemDisplayMaterialResources(const std::string& name);
+    static bool ExtractItemDisplayModelMaterialResources(const std::string& name);
+    static bool ExtractItemDisplayInfo(const std::string& name);
+    static bool ExtractLight(const std::string& name);
+    static bool ExtractLightParams(const std::string& name);
+    static bool ExtractLightData(const std::string& name);
+    static bool ExtractLightSkybox(const std::string& name);
 
 public:
-    static ClientDB::Storage<ClientDB::Definitions::Map> mapStorage;
-    static ClientDB::Storage<ClientDB::Definitions::LiquidObject> liquidObjectStorage;
-    static ClientDB::Storage<ClientDB::Definitions::LiquidType> liquidTypeStorage;
-    static ClientDB::Storage<ClientDB::Definitions::LiquidMaterial> liquidMaterialStorage;
-    static ClientDB::Storage<ClientDB::Definitions::CinematicCamera> cinematicCameraStorage;
-    static ClientDB::Storage<ClientDB::Definitions::CinematicSequence> cinematicSequenceStorage;
-    static ClientDB::Storage<ClientDB::Definitions::AnimationData> animationDataStorage;
-    static ClientDB::Storage<ClientDB::Definitions::CreatureDisplayInfo> creatureDisplayInfoStorage;
-    static ClientDB::Storage<ClientDB::Definitions::CreatureDisplayInfoExtra> creatureDisplayInfoExtraStorage;
-    static ClientDB::Storage<ClientDB::Definitions::CreatureModelData> creatureModelDataStorage;
-    static ClientDB::Storage<ClientDB::Definitions::TextureFileData> textureFileDataStorage;
-    static ClientDB::Storage<ClientDB::Definitions::CharSection> charSectionStorage;
-    static ClientDB::Storage<ClientDB::Definitions::Light> lightStorage;
-    static ClientDB::Storage<ClientDB::Definitions::LightParam> lightParamsStorage;
-    static ClientDB::Storage<ClientDB::Definitions::LightData> lightDataStorage;
-    static ClientDB::Storage<ClientDB::Definitions::LightSkybox> lightSkyboxStorage;
+    static ClientDB::Data modelFileDataStorage;
+    static ClientDB::Data textureFileDataStorage;
+    static ClientDB::Data mapStorage;
+    static ClientDB::Data liquidObjectStorage;
+    static ClientDB::Data liquidTypeStorage;
+    static ClientDB::Data liquidMaterialStorage;
+    static ClientDB::Data cinematicCameraStorage;
+    static ClientDB::Data cinematicSequenceStorage;
+    static ClientDB::Data animationDataStorage;
+    static ClientDB::Data creatureModelDataStorage;
+    static ClientDB::Data creatureDisplayInfoStorage;
+    static ClientDB::Data creatureDisplayInfoExtraStorage;
+    static ClientDB::Data itemDisplayMaterialResourcesStorage;
+    static ClientDB::Data itemDisplayModelMaterialResourcesStorage;
+    static ClientDB::Data itemDisplayInfoStorage;
+    static ClientDB::Data lightStorage;
+    static ClientDB::Data lightParamsStorage;
+    static ClientDB::Data lightDataStorage;
+    static ClientDB::Data lightSkyboxStorage;
 
-    static robin_hood::unordered_map<u32, u32> materialResourcesIDToTextureFileDataEntry;
+    static robin_hood::unordered_map<u32, std::vector<u32>> modelResourcesIDToModelFileDataEntry;
+    static robin_hood::unordered_map<u32, std::vector<u32>> materialResourcesIDToTextureFileDataEntry;
 
 private:
     struct ExtractionEntry
     {
     public:
-        ExtractionEntry(std::string inName, std::string inDescription, std::function<bool()> inFunction) : name(inName), description(inDescription), function(inFunction) { }
+        ExtractionEntry(std::string inName, std::string inDescription, std::function<bool(const std::string& name)> inFunction) : name(inName), description(inDescription), function(inFunction) { }
         
         const std::string name;
         const std::string description;
-        const std::function<bool()> function;
+        const std::function<bool(const std::string& name)> function;
     };
 
     static std::vector<ExtractionEntry> _extractionEntries;
