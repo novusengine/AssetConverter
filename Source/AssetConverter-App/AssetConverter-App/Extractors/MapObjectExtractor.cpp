@@ -191,12 +191,11 @@ void MapObjectExtractor::Process()
 
             // if build physics shapes
             {
-                bool hasRenderBatch = cmodel.modelData.renderBatches.size() != 0;
-                u32 numCollisionVertices = static_cast<u32>(cmodel.vertices.size());
-                u32 numCollisionIndices = static_cast<u32>(cmodel.modelData.indices.size());
+                u32 numCollisionVertices = static_cast<u32>(cmodel.collisionVertexPositions.size());
+                u32 numCollisionIndices = static_cast<u32>(cmodel.collisionIndices.size());
                 u32 indexRemainder = numCollisionIndices % 3;
 
-                if (hasRenderBatch && numCollisionVertices > 0 && numCollisionIndices > 0 && indexRemainder == 0)
+                if (numCollisionVertices > 0 && numCollisionIndices > 0 && indexRemainder == 0)
                 {
                     u32 numTriangles = numCollisionIndices / 3;
 
@@ -208,43 +207,37 @@ void MapObjectExtractor::Process()
 
                     for (u32 i = 0; i < numCollisionVertices; i++)
                     {
-                        const Model::ComplexModel::Vertex& vertex = cmodel.vertices[i];
-                        vertexList.push_back({ vertex.position.x, vertex.position.y, vertex.position.z });
+                        const vec3& vertexPos = cmodel.collisionVertexPositions[i];
+                        vertexList.push_back({ vertexPos.x, vertexPos.y, vertexPos.z });
                     }
 
-                    for (const Model::ComplexModel::RenderBatch& renderBatch : cmodel.modelData.renderBatches)
+                    for (u32 i = 0; i < numTriangles; i++)
                     {
-                        for (u32 i = 0; i < renderBatch.indexCount; i += 3)
-                        {
-                            u32 indexOffset = renderBatch.indexStart + i;
+                        u32 offset = i * 3;
 
-                            u32 indexA = renderBatch.vertexStart + cmodel.modelData.indices[indexOffset + 2];
-                            u32 indexB = renderBatch.vertexStart + cmodel.modelData.indices[indexOffset + 1];
-                            u32 indexC = renderBatch.vertexStart + cmodel.modelData.indices[indexOffset + 0];
+                        u32 indexA = cmodel.collisionIndices[offset + 2];
+                        u32 indexB = cmodel.collisionIndices[offset + 1];
+                        u32 indexC = cmodel.collisionIndices[offset + 0];
 
-                            triangleList.push_back({ indexA, indexB, indexC });
-                        }
+                        triangleList.push_back({ indexA, indexB, indexC });
                     }
 
-                    if (triangleList.size() > 0)
+                    JPH::MeshShapeSettings shapeSetting(vertexList, triangleList);
+                    JPH::ShapeSettings::ShapeResult shapeResult = shapeSetting.Create();
+                    JPH::ShapeRefC shape = shapeResult.Get();
+
+                    JPH::Shape::ShapeToIDMap shapeMap;
+                    JPH::Shape::MaterialToIDMap materialMap;
+
+                    std::shared_ptr<Bytebuffer> joltChunkBuffer = Bytebuffer::Borrow<16777216>();
+                    JoltStream joltStream(joltChunkBuffer);
+
+                    shape->SaveWithChildren(joltStream, shapeMap, materialMap);
+
+                    if (!joltStream.IsFailed() && joltChunkBuffer->writtenData > 0)
                     {
-                        JPH::MeshShapeSettings shapeSetting(vertexList, triangleList);
-                        JPH::ShapeSettings::ShapeResult shapeResult = shapeSetting.Create();
-                        JPH::ShapeRefC shape = shapeResult.Get();
-
-                        JPH::Shape::ShapeToIDMap shapeMap;
-                        JPH::Shape::MaterialToIDMap materialMap;
-
-                        std::shared_ptr<Bytebuffer> joltChunkBuffer = Bytebuffer::Borrow<16777216>();
-                        JoltStream joltStream(joltChunkBuffer);
-
-                        shape->SaveWithChildren(joltStream, shapeMap, materialMap);
-
-                        if (!joltStream.IsFailed() && joltChunkBuffer->writtenData > 0)
-                        {
-                            cmodel.physicsData.resize(joltChunkBuffer->writtenData);
-                            memcpy(&cmodel.physicsData[0], joltChunkBuffer->GetDataPointer(), joltChunkBuffer->writtenData);
-                        }
+                        cmodel.physicsData.resize(joltChunkBuffer->writtenData);
+                        memcpy(&cmodel.physicsData[0], joltChunkBuffer->GetDataPointer(), joltChunkBuffer->writtenData);
                     }
                 }
             }

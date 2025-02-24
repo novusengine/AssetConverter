@@ -174,7 +174,7 @@ bool ClientDBExtractor::ExtractModelFileData(const std::string& name)
 
     modelFileDataStorage.Initialize({
         { "Flags",              FieldType::I8   },
-        { "ModelHash",          FieldType::I32  },
+        { "ModelPath",          FieldType::StringRef  },
         { "ModelResourcesID",   FieldType::I32  },
     });
     modelFileDataStorage.Reserve(header.recordCount);
@@ -198,13 +198,11 @@ bool ClientDBExtractor::ExtractModelFileData(const std::string& name)
             const std::string& fileStr = cascLoader->GetFilePathFromListFileID(modelFileID);
 
             fs::path filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
-            u32 nameHash = StringUtils::fnv1a_32(filePath.string().c_str(), filePath.string().size());
-
-            modelFileData.modelHash = nameHash;
+            modelFileData.modelPath = modelFileDataStorage.AddString(filePath.string());
         }
         else
         {
-            modelFileData.modelHash = std::numeric_limits<u32>::max();
+            modelFileData.modelPath = 0;
         }
 
         auto& modelFileDataEntries = modelResourcesIDToModelFileDataEntry[modelFileData.modelResourcesID];
