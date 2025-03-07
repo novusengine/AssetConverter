@@ -188,14 +188,17 @@ void MapExtractor::Process()
                         continue;
 
                     Map::Chunk chunk = { };
-                    if (!Map::Chunk::FromADT(adt, chunk))
+                    std::vector<Terrain::Placement> modelPlacements;
+                    Map::LiquidInfo liquidInfo;
+                    std::vector<u8> physicsData;
+                    if (!Map::Chunk::FromADT(adt, chunk, modelPlacements, liquidInfo))
                         continue;
 
                     // Post Processing
                     {
-                        for (u32 i = 0; i < chunk.mapObjectPlacements.size(); i++)
+                        for (u32 i = 0; i < modelPlacements.size(); i++)
                         {
-                            Terrain::Placement& placementInfo = chunk.mapObjectPlacements[i];
+                            Terrain::Placement& placementInfo = modelPlacements[i];
 
                             if (placementInfo.nameHash == 0 ||
                                 placementInfo.nameHash == std::numeric_limits<u32>().max())
@@ -203,35 +206,14 @@ void MapExtractor::Process()
 
                             if (!cascLoader->InCascAndListFile(placementInfo.nameHash))
                             {
-                                NC_LOG_ERROR("[Map Extractor] Skipped map object placement because file doesn't exist");
+                                NC_LOG_ERROR("Skipped model placement because file doesn't exist");
                                 continue;
                             }
 
-                            const std::string& wmoPathStr = cascLoader->GetFilePathFromListFileID(placementInfo.nameHash);
-                            fs::path wmoPath = fs::path(wmoPathStr).replace_extension(Model::FILE_EXTENSION);
+                            const std::string& modelPathStr = cascLoader->GetFilePathFromListFileID(placementInfo.nameHash);
+                            fs::path modelPath = fs::path(modelPathStr).replace_extension(Model::FILE_EXTENSION);
 
-                            u32 nameHash = StringUtils::fnv1a_32(wmoPath.string().c_str(), wmoPath.string().size());
-                            placementInfo.nameHash = nameHash;
-                        }
-
-                        for (u32 i = 0; i < chunk.complexModelPlacements.size(); i++)
-                        {
-                            Terrain::Placement& placementInfo = chunk.complexModelPlacements[i];
-
-                            if (placementInfo.nameHash == 0 ||
-                                placementInfo.nameHash == std::numeric_limits<u32>().max())
-                                continue;
-
-                            if (!cascLoader->InCascAndListFile(placementInfo.nameHash))
-                            {
-                                NC_LOG_ERROR("Skipped complex model placement because file doesn't exist");
-                                continue;
-                            }
-
-                            const std::string& m2PathStr = cascLoader->GetFilePathFromListFileID(placementInfo.nameHash);
-                            fs::path m2Path = fs::path(m2PathStr).replace_extension(Model::FILE_EXTENSION);
-
-                            u32 nameHash = StringUtils::fnv1a_32(m2Path.string().c_str(), m2Path.string().size());
+                            u32 nameHash = StringUtils::fnv1a_32(modelPath.string().c_str(), modelPath.string().size());
                             placementInfo.nameHash = nameHash;
                         }
 
@@ -251,21 +233,21 @@ void MapExtractor::Process()
                         
                         for (u16 i = 0; i < Terrain::CHUNK_NUM_CELLS; i++)
                         {
-                            Map::Cell& cell = chunk.cells[i];
+                            u16 cellIndex = i;
 
                             const u32 numLayers = static_cast<u32>(adt.cellInfos[i].mcly.data.size());
                             const u32 basePixelDestination = (i * Terrain::CHUNK_ALPHAMAP_CELL_RESOLUTION * Terrain::CHUNK_ALPHAMAP_CELL_NUM_CHANNELS);
 
                             for (u32 j = 0; j < 4; j++)
                             {
-                                u32 fileID = cell.layers[j].textureID;
+                                u32 fileID = chunk.cellsData.layerTextureIDs[cellIndex][j];
                                 if (fileID == 0 || fileID == std::numeric_limits<u32>().max())
                                     continue;
 
                                 fs::path texturePath = cascLoader->GetFilePathFromListFileID(fileID);
                                 if (texturePath.empty())
                                 {
-                                    cell.layers[j].textureID = std::numeric_limits<u32>().max();
+                                    chunk.cellsData.layerTextureIDs[cellIndex][j] = std::numeric_limits<u32>().max();
                                     continue;
                                 }
 
@@ -276,7 +258,7 @@ void MapExtractor::Process()
                                 std::replace(texturePathStr.begin(), texturePathStr.end(), '\\', '/');
 
                                 u32 textureNameHash = StringUtils::fnv1a_32(texturePathStr.c_str(), texturePathStr.length());
-                                cell.layers[j].textureID = textureNameHash;
+                                chunk.cellsData.layerTextureIDs[cellIndex][j] = textureNameHash;
 
                                 // If the layer has alpha data, add it to our per-chunk alphamap
                                 if (j > 0)
@@ -383,17 +365,15 @@ void MapExtractor::Process()
 
                             for (u32 cellID = 0; cellID < Terrain::CHUNK_NUM_CELLS; cellID++)
                             {
-                                const Map::Cell& cell = chunk.cells[cellID];
-
                                 for (u32 i = 0; i < Terrain::CELL_TOTAL_GRID_SIZE; i++)
                                 {
-                                    const Map::Cell::VertexData& vertexA = cell.vertexData[i];
+                                    f32 height = chunk.cellsData.heightField[cellID][i];
 
                                     vec2 pos = GetCellVertexPosition(cellID, i);
                                     assert(pos.x <= Terrain::CHUNK_SIZE);
                                     assert(pos.y <= Terrain::CHUNK_SIZE);
 
-                                    vertexList.push_back({ pos.x, f32(vertexA.height), pos.y });
+                                    vertexList.push_back({ pos.x, height, pos.y });
                                 }
 
                                 for (u32 i = 0; i < Terrain::CELL_NUM_TRIANGLES; i++)
@@ -432,7 +412,8 @@ void MapExtractor::Process()
                                     u32 vertexID3 = (cellID * Terrain::CELL_TOTAL_GRID_SIZE) + patchVertexIDs[(!triangleComponentOffsets.y) * 2 + triangleComponentOffsets.x];
 
                                     u32 localCenterVertexID = patchVertexIDs[4];
-                                    if (IsHoleVertex(localCenterVertexID, cell.hole))
+                                    u64 holeData = chunk.cellsData.holes[cellID];
+                                    if (IsHoleVertex(localCenterVertexID, holeData))
                                         continue;
 
                                     triangleList.push_back({ vertexID3, vertexID2, vertexID1 });
@@ -452,14 +433,14 @@ void MapExtractor::Process()
 
                             if (!joltStream.IsFailed() && joltChunkBuffer->writtenData > 0)
                             {
-                                chunk.physicsData.resize(joltChunkBuffer->writtenData);
-                                memcpy(&chunk.physicsData[0], joltChunkBuffer->GetDataPointer(), joltChunkBuffer->writtenData);
+                                physicsData.resize(joltChunkBuffer->writtenData);
+                                memcpy(&physicsData[0], joltChunkBuffer->GetDataPointer(), joltChunkBuffer->writtenData);
                             }
                         }
 
                         std::string localChunkPath = internalName + "/" + internalName + "_" + std::to_string(chunkGridPosX) + "_" + std::to_string(chunkGridPosY) + Map::CHUNK_FILE_EXTENSION;
                         std::string chunkOutputPath = (runtime->paths.map / localChunkPath).string();
-                        chunk.Save(chunkOutputPath);
+                        chunk.Save(chunkOutputPath, modelPlacements, liquidInfo, physicsData);
                     }
                 }
             });

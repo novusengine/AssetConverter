@@ -235,7 +235,6 @@ bool ClientDBExtractor::ExtractTextureFileData(const std::string& name)
     const DB2::WDC3::Layout::Header& header = layout.header;
     
     textureFileDataStorage.Initialize({
-        { "Usage",                  FieldType::I8   },
         { "TextureHash",            FieldType::I32  },
         { "MaterialResourcesID",    FieldType::I32  },
     });
@@ -255,7 +254,6 @@ bool ClientDBExtractor::ExtractTextureFileData(const std::string& name)
         u32 id = db2RecordIndex + 1;
 
         u32 textureFileID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
-        textureFileData.usage = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 1);
         textureFileData.materialResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2);
 
         if (cascLoader->InCascAndListFile(textureFileID))
@@ -1029,7 +1027,7 @@ bool ClientDBExtractor::ExtractCreatureDisplayInfoExtra(const std::string& name)
         Definitions::CreatureDisplayInfoExtra creatureDisplayInfoExtra;
         recordID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
         creatureDisplayInfoExtra.displayRaceID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 1);
-        creatureDisplayInfoExtra.displaySexID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 2);
+        creatureDisplayInfoExtra.displaySexID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 2) + 1;
         creatureDisplayInfoExtra.displayClassID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 3);
         creatureDisplayInfoExtra.skinID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 4);
         creatureDisplayInfoExtra.faceID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 5);
@@ -1078,11 +1076,9 @@ bool ClientDBExtractor::ExtractItemDisplayMaterialResources(const std::string& n
     const DB2::WDC3::Layout::Header& header = layout.header;
     
     itemDisplayMaterialResourcesStorage.Initialize( {
-        { "ComponentSection",   ClientDB::FieldType::I8     },
-        { "DisplayID",          ClientDB::FieldType::I32    },
-        { "TextureHash1",       ClientDB::FieldType::I32    },
-        { "TextureHash2",       ClientDB::FieldType::I32    },
-        { "TextureHash3",       ClientDB::FieldType::I32    },
+        { "DisplayID",              ClientDB::FieldType::I32 },
+        { "ComponentSection",       ClientDB::FieldType::I8 },
+        { "MaterialResourcesID",    ClientDB::FieldType::I32 }
     });
     itemDisplayMaterialResourcesStorage.Reserve(header.recordCount);
 
@@ -1096,31 +1092,70 @@ bool ClientDBExtractor::ExtractItemDisplayMaterialResources(const std::string& n
             continue;
 
         Definitions::ItemDisplayMaterialResources itemDisplayMaterialResource;
-        itemDisplayMaterialResource.componentSection = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 0);
-
-        u32 materialResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1);
-
         itemDisplayMaterialResource.displayID = 0;
-        itemDisplayMaterialResource.textureHash[0] = std::numeric_limits<u32>::max();
-        itemDisplayMaterialResource.textureHash[1] = std::numeric_limits<u32>::max();
-        itemDisplayMaterialResource.textureHash[2] = std::numeric_limits<u32>::max();
+        u8 componentSection = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 0);
+        itemDisplayMaterialResource.materialResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1);
 
-        if (materialResourcesID != 0 && materialResourcesIDToTextureFileDataEntry.contains(materialResourcesID))
+        switch (componentSection)
         {
-            auto& textureFileDataEntries = materialResourcesIDToTextureFileDataEntry[materialResourcesID];
-            u32 numTextureEntries = static_cast<u32>(textureFileDataEntries.size());
-
-            NC_ASSERT(numTextureEntries <= 3, "Found more than 3 textures for MaterialResourcesID({0}, {1})", materialResourcesID, numTextureEntries);
-
-            for (u32 i = 0; i < numTextureEntries; i++)
+            case 0: // ArmUpper
             {
-                u32 textureFileDataID = textureFileDataEntries[i];
-                auto& textureFileData = textureFileDataStorage.Get<ClientDB::Definitions::TextureFileData>(textureFileDataID);
+                componentSection = 5;
+                break;
+            }
+            case 1: // ArmLower
+            {
+                componentSection = 6;
+                break;
+            }
+            case 2: // Hand
+            {
+                componentSection = 7;
+                break;
+            }
+            case 3: // TorsoUpper
+            {
+                componentSection = 3;
+                break;
+            }
+            case 4: // TorsoLower
+            {
+                componentSection = 4;
+                break;
+            }
+            case 5: // LegUpper
+            {
+                componentSection = 8;
+                break;
+            }
+            case 6: // LegLower
+            {
+                componentSection = 9;
+                break;
+            }
+            case 7: // Foot
+            {
+                componentSection = 10;
+                break;
+            }
+            case 9: // ScalpUpper
+            {
+                componentSection = 1;
+                break;
+            }
+            case 10: // ScalpLower
+            {
+                componentSection = 2;
+                break;
+            }
 
-                itemDisplayMaterialResource.textureHash[i] = textureFileData.textureHash;
+            default:
+            {
+                componentSection = 255;
             }
         }
 
+        itemDisplayMaterialResource.componentSection = componentSection;
         itemDisplayMaterialResourcesStorage.Replace(recordID, itemDisplayMaterialResource);
     }
 
@@ -1155,13 +1190,10 @@ bool ClientDBExtractor::ExtractItemDisplayModelMaterialResources(const std::stri
     const DB2::WDC3::Layout::Header& header = layout.header;
     
     itemDisplayModelMaterialResourcesStorage.Initialize( {
+        { "DisplayID",              ClientDB::FieldType::I32    },
         { "ModelIndex",             ClientDB::FieldType::I8     },
         { "TextureType",            ClientDB::FieldType::I8     },
-        { "DisplayID",              ClientDB::FieldType::I32    },
-        { "MaterialResourcesID",    ClientDB::FieldType::I32    },
-        { "TextureHash1",           ClientDB::FieldType::I32    },
-        { "TextureHash2",           ClientDB::FieldType::I32    },
-        { "TextureHash3",           ClientDB::FieldType::I32    },
+        { "MaterialResourcesID",    ClientDB::FieldType::I32    }
     });
     itemDisplayModelMaterialResourcesStorage.Reserve(header.recordCount);
 
@@ -1175,30 +1207,10 @@ bool ClientDBExtractor::ExtractItemDisplayModelMaterialResources(const std::stri
             continue;
 
         Definitions::ItemDisplayModelMaterialResources itemDisplayModelMaterialResource;
-        itemDisplayModelMaterialResource.materialResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
-        itemDisplayModelMaterialResource.textureType = static_cast<u8>(db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1));
-        itemDisplayModelMaterialResource.modelIndex = static_cast<u8>(db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2));
-
-        itemDisplayModelMaterialResource.textureHash[0] = std::numeric_limits<u32>::max();
-        itemDisplayModelMaterialResource.textureHash[1] = std::numeric_limits<u32>::max();
-        itemDisplayModelMaterialResource.textureHash[2] = std::numeric_limits<u32>::max();
         itemDisplayModelMaterialResource.displayID = 0;
-
-        if (itemDisplayModelMaterialResource.materialResourcesID != 0 && materialResourcesIDToTextureFileDataEntry.contains(itemDisplayModelMaterialResource.materialResourcesID))
-        {
-            auto& textureFileDataEntries = materialResourcesIDToTextureFileDataEntry[itemDisplayModelMaterialResource.materialResourcesID];
-            u32 numTextureEntries = static_cast<u32>(textureFileDataEntries.size());
-
-            NC_ASSERT(numTextureEntries <= 3, "Found more than 3 textures for MaterialResourcesID({0}, {1})", itemDisplayModelMaterialResource.materialResourcesID, numTextureEntries);
-
-            for (u32 i = 0; i < numTextureEntries; i++)
-            {
-                u32 textureFileDataID = textureFileDataEntries[i];
-                auto& textureFileData = textureFileDataStorage.Get<ClientDB::Definitions::TextureFileData>(textureFileDataID);
-
-                itemDisplayModelMaterialResource.textureHash[i] = textureFileData.textureHash;
-            }
-        }
+        itemDisplayModelMaterialResource.modelIndex = static_cast<u8>(db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2));
+        itemDisplayModelMaterialResource.textureType = static_cast<u8>(db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1));
+        itemDisplayModelMaterialResource.materialResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
 
         itemDisplayModelMaterialResourcesStorage.Replace(recordID, itemDisplayModelMaterialResource);
     }
@@ -1249,12 +1261,12 @@ bool ClientDBExtractor::ExtractItemDisplayInfo(const std::string& name)
         { "MaterialResourcesID2",       ClientDB::FieldType::I32    },
         { "ModelType1",                 ClientDB::FieldType::I32    },
         { "ModelType2",                 ClientDB::FieldType::I32    },
-        { "GoesetGroup1",               ClientDB::FieldType::I32    },
-        { "GoesetGroup2",               ClientDB::FieldType::I32    },
-        { "GoesetGroup3",               ClientDB::FieldType::I32    },
-        { "GoesetGroup4",               ClientDB::FieldType::I32    },
-        { "GoesetGroup5",               ClientDB::FieldType::I32    },
-        { "GoesetGroup6",               ClientDB::FieldType::I32    },
+        { "GeosetGroup1",               ClientDB::FieldType::I32    },
+        { "GeosetGroup2",               ClientDB::FieldType::I32    },
+        { "GeosetGroup3",               ClientDB::FieldType::I32    },
+        { "GeosetGroup4",               ClientDB::FieldType::I32    },
+        { "GeosetGroup5",               ClientDB::FieldType::I32    },
+        { "GeosetGroup6",               ClientDB::FieldType::I32    },
         { "GeosetAttachmentGroup1",     ClientDB::FieldType::I32    },
         { "GeosetAttachmentGroup2",     ClientDB::FieldType::I32    },
         { "GeosetAttachmentGroup3",     ClientDB::FieldType::I32    },
@@ -1300,7 +1312,7 @@ bool ClientDBExtractor::ExtractItemDisplayInfo(const std::string& name)
 
         // goesetGroup
         const u32* goesetGroups = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 13);
-        memcpy(&itemDisplayInfo.goesetGroup[0], goesetGroups, 6 * sizeof(u32));
+        memcpy(&itemDisplayInfo.geosetGroup[0], goesetGroups, 6 * sizeof(u32));
 
         // geosetAttachmentGroup
         const u32* geosetAttachmentGroups = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 14);
