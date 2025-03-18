@@ -1,6 +1,5 @@
 #pragma once
 #include <FileFormat/Novus/ClientDB/ClientDB.h>
-#include <FileFormat/Novus/ClientDB/Definitions.h>
 
 #include <robinhood/robinhood.h>
 

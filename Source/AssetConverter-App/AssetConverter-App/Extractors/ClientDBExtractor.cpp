@@ -4,6 +4,7 @@
 #include "AssetConverter-App/Util/ServiceLocator.h"
 
 #include <Base/Container/StringTable.h>
+#include <Base/Math/Geometry.h>
 #include <Base/Memory/FileWriter.h>
 #include <Base/Util/DebugHandler.h>
 #include <Base/Util/StringUtils.h>
@@ -13,8 +14,9 @@
 #include <FileFormat/Warcraft/DB2/Wdc3.h>
 #include <FileFormat/Warcraft/Parsers/Wdc3Parser.h>
 #include <FileFormat/Novus/ClientDB/ClientDB.h>
-#include <FileFormat/Novus/ClientDB/Definitions.h>
 #include <FileFormat/Novus/Model/ComplexModel.h>
+
+#include <Meta/Generated/ClientDB.h>
 
 #include <filesystem>
 namespace fs = std::filesystem;
@@ -172,11 +174,7 @@ bool ClientDBExtractor::ExtractModelFileData(const std::string& name)
 
     const DB2::WDC3::Layout::Header& header = layout.header;
 
-    modelFileDataStorage.Initialize({
-        { "Flags",              FieldType::I8   },
-        { "ModelPath",          FieldType::StringRef  },
-        { "ModelResourcesID",   FieldType::I32  },
-    });
+    modelFileDataStorage.Initialize<Generated::ModelFileDataRecord>();
     modelFileDataStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -188,31 +186,27 @@ bool ClientDBExtractor::ExtractModelFileData(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::ModelFileData modelFileData;
+        Generated::ModelFileDataRecord modelFileData;
         u32 modelFileID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
         modelFileData.flags = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 1);
         modelFileData.modelResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 3);
-
+        
+        fs::path filePath = "";
         if (cascLoader->InCascAndListFile(modelFileID))
         {
             const std::string& fileStr = cascLoader->GetFilePathFromListFileID(modelFileID);
+            filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
+        }
 
-            fs::path filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
-            modelFileData.modelPath = modelFileDataStorage.AddString(filePath.string());
-        }
-        else
-        {
-            modelFileData.modelPath = 0;
-        }
+        modelFileData.model = modelFileDataStorage.AddString(filePath.string());
 
         auto& modelFileDataEntries = modelResourcesIDToModelFileDataEntry[modelFileData.modelResourcesID];
         modelFileDataEntries.push_back(modelFileID);
 
-        bool didOverride = false;
-        modelFileDataStorage.Replace(db2RecordIndex + 1, modelFileData, didOverride);
+        modelFileDataStorage.Replace(db2RecordIndex + 1, modelFileData);
     }
 
-    RepopulateFromCopyTable<Definitions::ModelFileData>(layout, modelFileDataStorage);
+    RepopulateFromCopyTable<Generated::ModelFileDataRecord>(layout, modelFileDataStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!modelFileDataStorage.Save(path))
@@ -233,11 +227,8 @@ bool ClientDBExtractor::ExtractTextureFileData(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    textureFileDataStorage.Initialize({
-        { "TextureHash",            FieldType::I32  },
-        { "MaterialResourcesID",    FieldType::I32  },
-    });
+
+    textureFileDataStorage.Initialize<Generated::TextureFileDataRecord>();
     textureFileDataStorage.Reserve(header.recordCount);
     materialResourcesIDToTextureFileDataEntry.reserve(header.recordCount * 2);
 
@@ -250,34 +241,28 @@ bool ClientDBExtractor::ExtractTextureFileData(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::TextureFileData textureFileData;
+        Generated::TextureFileDataRecord textureFileData;
         u32 id = db2RecordIndex + 1;
 
         u32 textureFileID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
         textureFileData.materialResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2);
 
+        fs::path filePath = "";
         if (cascLoader->InCascAndListFile(textureFileID))
         {
             const std::string& fileStr = cascLoader->GetFilePathFromListFileID(textureFileID);
-
-            fs::path filePath = fs::path(fileStr).replace_extension("dds");
-            u32 nameHash = StringUtils::fnv1a_32(filePath.string().c_str(), filePath.string().size());
-
-            textureFileData.textureHash = nameHash;
+            filePath = fs::path(fileStr).replace_extension("dds");
         }
-        else
-        {
-            textureFileData.textureHash = std::numeric_limits<u32>::max();
-        }
+
+        textureFileData.texture = textureFileDataStorage.AddString(filePath.string());
 
         auto& textureFileDataIDs = materialResourcesIDToTextureFileDataEntry[textureFileData.materialResourcesID];
         textureFileDataIDs.push_back(id);
 
-        bool didOverride = false;
-        textureFileDataStorage.Replace(id, textureFileData, didOverride);
+        textureFileDataStorage.Replace(id, textureFileData);
     }
 
-    RepopulateFromCopyTable<Definitions::TextureFileData>(layout, textureFileDataStorage);
+    RepopulateFromCopyTable<Generated::TextureFileDataRecord>(layout, textureFileDataStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!textureFileDataStorage.Save(path))
@@ -299,15 +284,7 @@ bool ClientDBExtractor::ExtractMap(const std::string& name)
 
     const DB2::WDC3::Layout::Header& header = layout.header;
 
-    mapStorage.Initialize( {
-        { "Name",           ClientDB::FieldType::StringRef  },
-        { "InternalName",   ClientDB::FieldType::StringRef  },
-        { "InstanceType",   ClientDB::FieldType::I32        },
-        { "Flags",          ClientDB::FieldType::I32        },
-        { "Expansion",      ClientDB::FieldType::I32        },
-        { "MaxPlayers",     ClientDB::FieldType::I32        },
-    });
-
+    mapStorage.Initialize<Generated::MapRecord>();
     mapStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -328,13 +305,13 @@ bool ClientDBExtractor::ExtractMap(const std::string& name)
         bool hasWDTFile = fileID > 0 && cascLoader->InCascAndListFile(fileID);
         if (hasWDTFile)
         {
-            Definitions::Map map = { };
+            Generated::MapRecord map = { };
 
             std::string internalName = GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 0);;
             std::string mapName = GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 1);
 
+            map.nameInternal = mapStorage.AddString(internalName);
             map.name = mapStorage.AddString(mapName);
-            map.internalName = mapStorage.AddString(internalName);
 
             const u8 instanceType = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 7);
             map.instanceType = instanceType;
@@ -343,17 +320,16 @@ bool ClientDBExtractor::ExtractMap(const std::string& name)
             map.flags = flags[0];
 
             const u8 expansion = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 8);
-            map.expansion = expansion;
+            map.expansionID = expansion;
 
             const u8 maxPlayers = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 18);
             map.maxPlayers = maxPlayers;
 
-            bool didOverride = false;
-            mapStorage.Replace(recordID, map, didOverride);
+            mapStorage.Replace(recordID, map);
         }
     }
 
-    RepopulateFromCopyTable<Definitions::Map>(layout, mapStorage);
+    RepopulateFromCopyTable<Generated::MapRecord>(layout, mapStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!mapStorage.Save(path))
@@ -374,15 +350,8 @@ bool ClientDBExtractor::ExtractLiquidObject(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    liquidObjectStorage.Initialize( {
-        { "LiquidTypeID",   ClientDB::FieldType::I16    },
-        { "Fishable",       ClientDB::FieldType::I8     },
-        { "Reflection",     ClientDB::FieldType::I8     },
-        { "FlowDirection",  ClientDB::FieldType::F32    },
-        { "FlowSpeed",      ClientDB::FieldType::F32    }
-    });
 
+    liquidObjectStorage.Initialize<Generated::LiquidObjectRecord>();
     liquidObjectStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -394,18 +363,14 @@ bool ClientDBExtractor::ExtractLiquidObject(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::LiquidObject liquidObject;
-        liquidObject.flowDirection = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 0);
-        liquidObject.flowSpeed = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 1);
+        Generated::LiquidObjectRecord liquidObject;
         liquidObject.liquidTypeID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 2);
         liquidObject.fishable = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 3);
-        liquidObject.reflection = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 4);
 
-        bool didOverride = false;
-        liquidObjectStorage.Replace(recordID, liquidObject, didOverride);
+        liquidObjectStorage.Replace(recordID, liquidObject);
     }
 
-    RepopulateFromCopyTable<Definitions::LiquidObject>(layout, liquidObjectStorage);
+    RepopulateFromCopyTable<Generated::LiquidObjectRecord>(layout, liquidObjectStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!liquidObjectStorage.Save(path))
@@ -425,63 +390,8 @@ bool ClientDBExtractor::ExtractLiquidType(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    liquidTypeStorage.Initialize( {
-        { "Name",                   ClientDB::FieldType::StringRef  },
-        { "Textures1",              ClientDB::FieldType::StringRef  },
-        { "Textures2",              ClientDB::FieldType::StringRef  },
-        { "Textures3",              ClientDB::FieldType::StringRef  },
-        { "Textures4",              ClientDB::FieldType::StringRef  },
-        { "Textures5",              ClientDB::FieldType::StringRef  },
-        { "Textures6",              ClientDB::FieldType::StringRef  },
-        { "Flags",                  ClientDB::FieldType::I16        },
-        { "LightID",                ClientDB::FieldType::I16        },
-        { "SoundID",                ClientDB::FieldType::I32        },
-        { "SpellID",                ClientDB::FieldType::I32        },
-        { "MaxDarkenDepth",         ClientDB::FieldType::F32        },
-        { "FogDarkenIntensity",     ClientDB::FieldType::F32        },
-        { "AmbDarkenIntensity",     ClientDB::FieldType::F32        },
-        { "DirDarkenIntensity",     ClientDB::FieldType::F32        },
-        { "ParticleScale",          ClientDB::FieldType::F32        },
-        { "materialID",             ClientDB::FieldType::I8         },
-        { "SoundBank",              ClientDB::FieldType::I8         },
-        { "ParticleMovement",       ClientDB::FieldType::I8         },
-        { "ParticleTexSlots",       ClientDB::FieldType::I8         },
-        { "MinimapStaticCol",       ClientDB::FieldType::I32        },
-        { "FrameCountTextures1",    ClientDB::FieldType::I32        },
-        { "FrameCountTextures2",    ClientDB::FieldType::I32        },
-        { "FrameCountTextures3",    ClientDB::FieldType::I32        },
-        { "FrameCountTextures4",    ClientDB::FieldType::I32        },
-        { "FrameCountTextures5",    ClientDB::FieldType::I32        },
-        { "FrameCountTextures6",    ClientDB::FieldType::I32        },
-        { "Colors1",                ClientDB::FieldType::I32        },
-        { "Colors2",                ClientDB::FieldType::I32        },
-        { "UnkFloats1",             ClientDB::FieldType::F32        },
-        { "UnkFloats2",             ClientDB::FieldType::F32        },
-        { "UnkFloats3",             ClientDB::FieldType::F32        },
-        { "UnkFloats4",             ClientDB::FieldType::F32        },
-        { "UnkFloats5",             ClientDB::FieldType::F32        },
-        { "UnkFloats6",             ClientDB::FieldType::F32        },
-        { "UnkFloats7",             ClientDB::FieldType::F32        },
-        { "UnkFloats8",             ClientDB::FieldType::F32        },
-        { "UnkFloats9",             ClientDB::FieldType::F32        },
-        { "UnkFloats10",            ClientDB::FieldType::F32        },
-        { "UnkFloats11",            ClientDB::FieldType::F32        },
-        { "UnkFloats12",            ClientDB::FieldType::F32        },
-        { "UnkFloats13",            ClientDB::FieldType::F32        },
-        { "UnkFloats14",            ClientDB::FieldType::F32        },
-        { "UnkFloats15",            ClientDB::FieldType::F32        },
-        { "UnkFloats16",            ClientDB::FieldType::F32        },
-        { "UnkInts1",               ClientDB::FieldType::I32        },
-        { "UnkInts2",               ClientDB::FieldType::I32        },
-        { "UnkInts3",               ClientDB::FieldType::I32        },
-        { "UnkInts4",               ClientDB::FieldType::I32        },
-        { "Coefficients1",          ClientDB::FieldType::I32        },
-        { "Coefficients2",          ClientDB::FieldType::I32        },
-        { "Coefficients3",          ClientDB::FieldType::I32        },
-        { "Coefficients4",          ClientDB::FieldType::I32        },
-    });
 
+    liquidTypeStorage.Initialize<Generated::LiquidTypeRecord>();
     liquidTypeStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -493,52 +403,41 @@ bool ClientDBExtractor::ExtractLiquidType(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::LiquidType liquidType;
+        Generated::LiquidTypeRecord liquidType;
         liquidType.name = liquidTypeStorage.AddString(GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 0));
 
-        for (u32 i = 0; i < 6; i++)
-            liquidType.textures[i] = liquidTypeStorage.AddString(GetStringFromArrRecordIndex(layout, db2Parser, db2RecordIndex, 1, i));
+        for (u32 textureIndex = 0; textureIndex < 6; textureIndex++)
+        {
+            liquidType.textures[textureIndex] = liquidTypeStorage.AddString(GetStringFromArrRecordIndex(layout, db2Parser, db2RecordIndex, 1, textureIndex));
+        }
 
         liquidType.flags = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 2);
         liquidType.soundBank = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 3);
         liquidType.soundID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 4);
-        liquidType.spellID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 5);
-        liquidType.maxDarkenDepth = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 6);
+        liquidType.maxDarkenDepth = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 6);
         liquidType.fogDarkenIntensity = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 7);
         liquidType.ambDarkenIntensity = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 8);
         liquidType.dirDarkenIntensity = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 9);
         liquidType.lightID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 10);
-        liquidType.particleScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 11);
+        liquidType.particleScale = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 11);
         liquidType.particleMovement = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 12);
-        liquidType.particleTexSlots = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 13);
+        liquidType.particleTextureSlot = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 13);
         liquidType.materialID = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 14);
-        liquidType.minimapStaticCol = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 15);
+        liquidType.minimapColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 15);
 
         const u8* frameCountTextures = db2Parser.GetFieldPtr<u8>(layout, sectionID, recordID, recordData, 16);
-        for (u32 i = 0; i < 6; i++)
-            liquidType.frameCountTextures[i] = frameCountTextures[i];
-
-        const u32* colors = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 17);
-        for (u32 i = 0; i < 2; i++)
-            liquidType.colors[i] = colors[i];
+        memcpy(&liquidType.frameCounts[0], frameCountTextures, sizeof(u8) * 6);
 
         const f32* unkFloats = db2Parser.GetFieldPtr<f32>(layout, sectionID, recordID, recordData, 18);
-        for (u32 i = 0; i < 16; i++)
-            liquidType.unkFloats[i] = unkFloats[i];
+        memcpy(&liquidType.unkFloats[0], unkFloats, sizeof(f32) * 16);
 
         const u32* unkInts = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 19);
-        for (u32 i = 0; i < 4; i++)
-            liquidType.unkInts[i] = unkInts[i];
+        memcpy(&liquidType.unkInts[0], unkInts, sizeof(i32) * 4);
 
-        const u32* coefficients = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 20);
-        for (u32 i = 0; i < 4; i++)
-            liquidType.coefficients[i] = coefficients[i];
-
-        bool didOverride = false;
-        liquidTypeStorage.Replace(recordID, liquidType, didOverride);
+        liquidTypeStorage.Replace(recordID, liquidType);
     }
 
-    RepopulateFromCopyTable<Definitions::LiquidType>(layout, liquidTypeStorage);
+    RepopulateFromCopyTable<Generated::LiquidTypeRecord>(layout, liquidTypeStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!liquidTypeStorage.Save(path))
@@ -558,11 +457,8 @@ bool ClientDBExtractor::ExtractLiquidMaterial(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    liquidMaterialStorage.Initialize( {
-        { "Flags",              ClientDB::FieldType::I8  },
-        { "LiquidVertexFormat", ClientDB::FieldType::I8  }
-    });
+
+    liquidMaterialStorage.Initialize<Generated::LiquidMaterialRecord>();
     liquidMaterialStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -574,15 +470,14 @@ bool ClientDBExtractor::ExtractLiquidMaterial(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::LiquidMaterial liquidMaterial;
+        Generated::LiquidMaterialRecord liquidMaterial;
         liquidMaterial.flags = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 0);
         liquidMaterial.liquidVertexFormat = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 1);
 
-        bool didOverride = false;
-        liquidMaterialStorage.Replace(recordID, liquidMaterial, didOverride);
+        liquidMaterialStorage.Replace(recordID, liquidMaterial);
     }
 
-    RepopulateFromCopyTable<Definitions::LiquidMaterial>(layout, liquidMaterialStorage);
+    RepopulateFromCopyTable<Generated::LiquidMaterialRecord>(layout, liquidMaterialStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!liquidMaterialStorage.Save(path))
@@ -603,15 +498,8 @@ bool ClientDBExtractor::ExtractCinematicCamera(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    cinematicCameraStorage.Initialize( {
-        { "EndPositionX",   ClientDB::FieldType::F32  },
-        { "EndPositionY",   ClientDB::FieldType::F32  },
-        { "EndPositionZ",   ClientDB::FieldType::F32  },
-        { "SoundID",        ClientDB::FieldType::I32  },
-        { "Rotation",       ClientDB::FieldType::F32  },
-        { "CameraPath",     ClientDB::FieldType::I32  }
-    });
+
+    cinematicCameraStorage.Initialize<Generated::CinematicCameraRecord>();
     cinematicCameraStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -623,33 +511,25 @@ bool ClientDBExtractor::ExtractCinematicCamera(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::CinematicCamera cinematicCamera;
-        const f32* endPosition = db2Parser.GetFieldPtr<f32>(layout, sectionID, recordID, recordData, 0);
-        cinematicCamera.endPosition = CoordinateSpaces::CinematicCameraPosToNovus(vec3(endPosition[0], endPosition[1], endPosition[2]));
+        Generated::CinematicCameraRecord cinematicCamera;
+        const vec3* endPosition = db2Parser.GetFieldPtr<vec3>(layout, sectionID, recordID, recordData, 0);
+        cinematicCamera.endPosition = CoordinateSpaces::CinematicCameraPosToNovus(*endPosition);
         cinematicCamera.soundID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1);
         cinematicCamera.rotation = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 2);
-        cinematicCamera.cameraPath = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 3);
 
-        u32 fileID = cinematicCamera.cameraPath;
+        fs::path filePath = "";
+        u32 fileID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 3);
         if (cascLoader->InCascAndListFile(fileID))
         {
-            const std::string& fileStr = cascLoader->GetFilePathFromListFileID(cinematicCamera.cameraPath);
-
-            fs::path filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
-            u32 nameHash = StringUtils::fnv1a_32(filePath.string().c_str(), filePath.string().size());
-
-            cinematicCamera.cameraPath = nameHash;
+            const std::string& fileStr = cascLoader->GetFilePathFromListFileID(fileID);
+            filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
         }
-        else
-        {
-            cinematicCamera.cameraPath = std::numeric_limits<u32>::max();
-        }
+        cinematicCamera.model = cinematicCameraStorage.AddString(filePath.string());
 
-        bool didOverride = false;
-        cinematicCameraStorage.Replace(recordID, cinematicCamera, didOverride);
+        cinematicCameraStorage.Replace(recordID, cinematicCamera);
     }
 
-    RepopulateFromCopyTable<Definitions::CinematicCamera>(layout, cinematicCameraStorage);
+    RepopulateFromCopyTable<Generated::CinematicCameraRecord>(layout, cinematicCameraStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!cinematicCameraStorage.Save(path))
@@ -669,18 +549,8 @@ bool ClientDBExtractor::ExtractCinematicSequence(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    cinematicSequenceStorage.Initialize( {
-        { "SoundID",    ClientDB::FieldType::I32    },
-        { "CameraID1",  ClientDB::FieldType::I16    },
-        { "CameraID2",  ClientDB::FieldType::I16    },
-        { "CameraID3",  ClientDB::FieldType::I16    },
-        { "CameraID4",  ClientDB::FieldType::I16    },
-        { "CameraID5",  ClientDB::FieldType::I16    },
-        { "CameraID6",  ClientDB::FieldType::I16    },
-        { "CameraID7",  ClientDB::FieldType::I16    },
-        { "CameraID8",  ClientDB::FieldType::I16    },
-    });
+
+    cinematicSequenceStorage.Initialize<Generated::CinematicSequenceRecord>();
     cinematicSequenceStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -692,17 +562,14 @@ bool ClientDBExtractor::ExtractCinematicSequence(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::CinematicSequence cinematicSequence;
-        cinematicSequence.soundID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
-
+        Generated::CinematicSequenceRecord cinematicSequence;
         const u16* cameraIDs = db2Parser.GetFieldPtr<u16>(layout, sectionID, recordID, recordData, 1);
-        memcpy(&cinematicSequence.cameraIDs[0], cameraIDs, 8 * sizeof(u16));
+        cinematicSequence.cameraID = cameraIDs[0];
 
-        bool didOverride = false;
-        cinematicSequenceStorage.Replace(recordID, cinematicSequence, didOverride);
+        cinematicSequenceStorage.Replace(recordID, cinematicSequence);
     }
 
-    RepopulateFromCopyTable<Definitions::CinematicSequence>(layout, cinematicSequenceStorage);
+    RepopulateFromCopyTable<Generated::CinematicSequenceRecord>(layout, cinematicSequenceStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!cinematicSequenceStorage.Save(path))
@@ -723,14 +590,8 @@ bool ClientDBExtractor::ExtractAnimationData(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    animationDataStorage.Initialize( {
-        { "Fallback",       ClientDB::FieldType::I16    },
-        { "BehaviorTier",   ClientDB::FieldType::I8     },
-        { "BehaviorID",     ClientDB::FieldType::I32    },
-        { "Flags1",         ClientDB::FieldType::I32    },
-        { "Flags2",         ClientDB::FieldType::I32    }
-    });
+
+    animationDataStorage.Initialize<Generated::AnimationDataRecord>();
     animationDataStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -742,19 +603,18 @@ bool ClientDBExtractor::ExtractAnimationData(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::AnimationData animationData;
+        Generated::AnimationDataRecord animationData;
         animationData.fallback = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 0);
         animationData.behaviorTier = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 1);
         animationData.behaviorID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2);
 
         const u32* flags = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 3);
-        memcpy(&animationData.flags[0], flags, 2 * sizeof(u32));
+        animationData.flags = flags[0] | static_cast<u64>(flags[1]) << 32;
 
-        bool didOverride = false;
-        animationDataStorage.Replace(recordID, animationData, didOverride);
+        animationDataStorage.Replace(recordID, animationData);
     }
 
-    RepopulateFromCopyTable<Definitions::AnimationData>(layout, animationDataStorage);
+    RepopulateFromCopyTable<Generated::AnimationDataRecord>(layout, animationDataStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!animationDataStorage.Save(path))
@@ -775,42 +635,8 @@ bool ClientDBExtractor::ExtractCreatureModelData(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    creatureModelDataStorage.Initialize( {
-        { "BoundBoxMinX",               ClientDB::FieldType::F32    },
-        { "BoundBoxMinY",               ClientDB::FieldType::F32    },
-        { "BoundBoxMinZ",               ClientDB::FieldType::F32    },
-        { "BoundBoxMaxX",               ClientDB::FieldType::F32    },
-        { "BoundBoxMaxY",               ClientDB::FieldType::F32    },
-        { "BoundBoxMaxZ",               ClientDB::FieldType::F32    },
-        { "Flags",                      ClientDB::FieldType::I32    },
-        { "ModelHash",                  ClientDB::FieldType::I32    },
-        { "BloodID",                    ClientDB::FieldType::I32    },
-        { "FootprintTextureID",         ClientDB::FieldType::I32    },
-        { "FootprintTextureLength",     ClientDB::FieldType::F32    },
-        { "FootprintTextureWidth",      ClientDB::FieldType::F32    },
-        { "FootprintParticleScale",     ClientDB::FieldType::F32    },
-        { "FoleyMaterialID",            ClientDB::FieldType::I32    },
-        { "FootstepCameraEffectID",     ClientDB::FieldType::I32    },
-        { "DeathThudCameraEffectID",    ClientDB::FieldType::I32    },
-        { "SoundID",                    ClientDB::FieldType::I32    },
-        { "SizeClass",                  ClientDB::FieldType::I32    },
-        { "CollisionWidth",             ClientDB::FieldType::F32    },
-        { "CollisionHeight",            ClientDB::FieldType::F32    },
-        { "WorldEffectScale",           ClientDB::FieldType::F32    },
-        { "CreatureGeosetDataID",       ClientDB::FieldType::I32    },
-        { "HoverHeight",                ClientDB::FieldType::F32    },
-        { "AttachedEffectScale",        ClientDB::FieldType::F32    },
-        { "ModelScale",                 ClientDB::FieldType::F32    },
-        { "MissileCollisionRadius",     ClientDB::FieldType::F32    },
-        { "MissileCollisionPush",       ClientDB::FieldType::F32    },
-        { "MissileCollisionRaise",      ClientDB::FieldType::F32    },
-        { "MountHeight",                ClientDB::FieldType::F32    },
-        { "OverrideLootEffectScale",    ClientDB::FieldType::F32    },
-        { "OverrideNameScale",          ClientDB::FieldType::F32    },
-        { "OverrideSelectionRadius",    ClientDB::FieldType::F32    },
-        { "TamedPetBaseScale",          ClientDB::FieldType::F32    },
-    });
+
+    creatureModelDataStorage.Initialize<Generated::CreatureModelDataRecord>();
     creatureModelDataStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -822,52 +648,40 @@ bool ClientDBExtractor::ExtractCreatureModelData(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::CreatureModelData creatureModelData;
-        creatureModelData.boundingBox = *db2Parser.GetFieldPtr<Geometry::AABoundingBox>(layout, sectionID, recordID, recordData, 0);
+        Generated::CreatureModelDataRecord creatureModelData;
+        const Geometry::AABoundingBox* boundingBox = db2Parser.GetFieldPtr<Geometry::AABoundingBox>(layout, sectionID, recordID, recordData, 0);
+        creatureModelData.boxMin = boundingBox->center;
+        creatureModelData.boxMax = boundingBox->extents;
+
         creatureModelData.flags = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1);
-        creatureModelData.modelHash = std::numeric_limits<u32>::max();
+
         u32 fileID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2);
         creatureModelData.bloodID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 3);
         creatureModelData.footprintTextureID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 4);
-        creatureModelData.footprintTextureLength = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 5);
-        creatureModelData.footprintTextureWidth = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 6);
-        creatureModelData.footprintParticleScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 7);
-        creatureModelData.foleyMaterialID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 8);
+        creatureModelData.footprintTextureLength = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 5);
+        creatureModelData.footprintTextureWidth = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 6);
+        creatureModelData.footprintParticleScale = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 7);
         creatureModelData.footstepCameraEffectID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 9);
         creatureModelData.deathThudCameraEffectID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 10);
         creatureModelData.soundID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 11);
         creatureModelData.sizeClass = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 12);
-        creatureModelData.collisionWidth = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 13);
-        creatureModelData.collisionHeight = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 14);
-        creatureModelData.worldEffectScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 15);
-        creatureModelData.creatureGeosetDataID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 16);
-        creatureModelData.hoverHeight = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 17);
-        creatureModelData.attachedEffectScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 18);
-        creatureModelData.modelScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 19);
-        creatureModelData.missileCollisionRadius = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 20);
-        creatureModelData.missileCollisionPush = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 21);
-        creatureModelData.missileCollisionRaise = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 22);
+        creatureModelData.collisionBox.x = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 13);
+        creatureModelData.collisionBox.y = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 14);
         creatureModelData.mountHeight = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 23);
-        creatureModelData.overrideLootEffectScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 24);
-        creatureModelData.overrideNameScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 25);
-        creatureModelData.overrideSelectionRadius = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 26);
-        creatureModelData.tamedPetBaseScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 27);
 
+        fs::path filePath = "";
         if (cascLoader->InCascAndListFile(fileID))
         {
             const std::string& fileStr = cascLoader->GetFilePathFromListFileID(fileID);
-
-            fs::path filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
-            u32 nameHash = StringUtils::fnv1a_32(filePath.string().c_str(), filePath.string().size());
-
-            creatureModelData.modelHash = nameHash;
+            filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
         }
 
-        bool didOverride = false;
-        creatureModelDataStorage.Replace(recordID, creatureModelData, didOverride);
+        creatureModelData.model = creatureModelDataStorage.AddString(filePath.string());
+
+        creatureModelDataStorage.Replace(recordID, creatureModelData);
     }
 
-    RepopulateFromCopyTable<Definitions::CreatureModelData>(layout, creatureModelDataStorage);
+    RepopulateFromCopyTable<Generated::CreatureModelDataRecord>(layout, creatureModelDataStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!creatureModelDataStorage.Save(path))
@@ -887,35 +701,8 @@ bool ClientDBExtractor::ExtractCreatureDisplayInfo(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    creatureDisplayInfoStorage.Initialize( {
-        { "ModelID",                        ClientDB::FieldType::I16    },
-        { "SoundID",                        ClientDB::FieldType::I16    },
-        { "Flags",                          ClientDB::FieldType::I8     },
-        { "Gender",                         ClientDB::FieldType::I8     },
-        { "SizeClass",                      ClientDB::FieldType::I8     },
-        { "BloodID",                        ClientDB::FieldType::I8     },
-        { "UnarmedWeaponType",              ClientDB::FieldType::I8     },
-        { "CreatureModelAlpha",             ClientDB::FieldType::I8     },
-        { "CreatureModelScale",             ClientDB::FieldType::F32    },
-        { "ExtendedDisplayInfoID",          ClientDB::FieldType::I32    },
-        { "NpcSoundID",                     ClientDB::FieldType::I16    },
-        { "ParticleColorID",                ClientDB::FieldType::I16    },
-        { "PortraitCreatureDisplayInfoID",  ClientDB::FieldType::I32    },
-        { "PortraitTextureFileDataID",      ClientDB::FieldType::I32    },
-        { "ObjectEffectPackageID",          ClientDB::FieldType::I16    },
-        { "AnimReplacementSetID",           ClientDB::FieldType::I16    },
-        { "StateSpellVisualKitID",          ClientDB::FieldType::I32    },
-        { "PlayerOverrideScale",            ClientDB::FieldType::F32    },
-        { "PetInstanceScale",               ClientDB::FieldType::F32    },
-        { "MountPoofSpellVisualKitID",      ClientDB::FieldType::I32    },
-        { "DissolveEffectID",               ClientDB::FieldType::I32    },
-        { "DissolveOutEffectID",            ClientDB::FieldType::I32    },
-        { "TextureVariations1",             ClientDB::FieldType::I32    },
-        { "TextureVariations2",             ClientDB::FieldType::I32    },
-        { "TextureVariations3",             ClientDB::FieldType::I32    },
-        { "TextureVariations4",             ClientDB::FieldType::I32    },
-    });
+
+    creatureDisplayInfoStorage.Initialize<Generated::CreatureDisplayInfoRecord>();
     creatureDisplayInfoStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -927,7 +714,7 @@ bool ClientDBExtractor::ExtractCreatureDisplayInfo(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::CreatureDisplayInfo creatureDisplayInfo;
+        Generated::CreatureDisplayInfoRecord creatureDisplayInfo;
         recordID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
         creatureDisplayInfo.modelID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 1);
         creatureDisplayInfo.soundID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 2);
@@ -937,47 +724,34 @@ bool ClientDBExtractor::ExtractCreatureDisplayInfo(const std::string& name)
         creatureDisplayInfo.bloodID = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 6);
         creatureDisplayInfo.extendedDisplayInfoID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 7);
         creatureDisplayInfo.npcSoundID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 8);
-        creatureDisplayInfo.particleColorID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 9);
-        creatureDisplayInfo.portraitCreatureDisplayInfoID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 10);
-        creatureDisplayInfo.portraitTextureFileDataID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 11);
-        creatureDisplayInfo.objectEffectPackageID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 12);
-        creatureDisplayInfo.animReplacementSetID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 13);
         creatureDisplayInfo.flags = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 14);
-        creatureDisplayInfo.stateSpellVisualKitID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 15);
-        creatureDisplayInfo.playerOverrideScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 16);
-        creatureDisplayInfo.petInstanceScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 17);
+        creatureDisplayInfo.creaturePetScale = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 17);
         creatureDisplayInfo.unarmedWeaponType = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 18);
-        creatureDisplayInfo.mountPoofSpellVisualKitID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 19);
-        creatureDisplayInfo.dissolveEffectID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 20);
         creatureDisplayInfo.gender = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 21);
-        creatureDisplayInfo.dissolveOutEffectID = db2Parser.GetField<i32>(layout, sectionID, recordID, recordData, 22);
 
-        const u32* textureVariations = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 25);
-        memcpy(&creatureDisplayInfo.textureVariations[0], textureVariations, 4 * sizeof(u32));
+        const u32* textureVariationFileIDs = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 25);
 
-        for (i32 i = 0; i < 4; i++)
+        fs::path filePath = "";
+
+        for (u32 textureVariantIndex = 0; textureVariantIndex < 4; textureVariantIndex++)
         {
-            i32 textureVariationFileID = creatureDisplayInfo.textureVariations[i];
+            filePath.clear();
 
-            if (textureVariationFileID == 0)
-                continue;
+            u32 textureFileID = textureVariationFileIDs[textureVariantIndex];
+            if (textureFileID > 0 && cascLoader->InCascAndListFile(textureFileID))
+            {
+                const std::string& fileStr = cascLoader->GetFilePathFromListFileID(textureFileID);
+                filePath = fs::path(fileStr).replace_extension("dds");
+                creatureDisplayInfo.textureVariations[textureVariantIndex] = creatureDisplayInfoStorage.AddString(filePath.string());
+            }
 
-            if (!cascLoader->InCascAndListFile(textureVariationFileID))
-                continue;
-
-            const std::string& fileStr = cascLoader->GetFilePathFromListFileID(textureVariationFileID);
-
-            fs::path filePath = fs::path(fileStr).replace_extension("dds");
-            u32 nameHash = StringUtils::fnv1a_32(filePath.string().c_str(), filePath.string().size());
-
-            creatureDisplayInfo.textureVariations[i] = nameHash;
+            creatureDisplayInfo.textureVariations[textureVariantIndex] = creatureDisplayInfoStorage.AddString(filePath.string());
         }
 
-        bool didOverride = false;
-        creatureDisplayInfoStorage.Replace(recordID, creatureDisplayInfo, didOverride);
+        creatureDisplayInfoStorage.Replace(recordID, creatureDisplayInfo);
     }
 
-    RepopulateFromCopyTable<Definitions::CreatureDisplayInfo>(layout, creatureDisplayInfoStorage);
+    RepopulateFromCopyTable<Generated::CreatureDisplayInfoRecord>(layout, creatureDisplayInfoStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!creatureDisplayInfoStorage.Save(path))
@@ -997,22 +771,8 @@ bool ClientDBExtractor::ExtractCreatureDisplayInfoExtra(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    creatureDisplayInfoExtraStorage.Initialize( {
-        { "Flags",                  ClientDB::FieldType::I8     },
-        { "DisplayRaceID",          ClientDB::FieldType::I8     },
-        { "DisplaySexID",           ClientDB::FieldType::I8     },
-        { "DisplayClassID",         ClientDB::FieldType::I8     },
-        { "SkinID",                 ClientDB::FieldType::I8     },
-        { "FaceID",                 ClientDB::FieldType::I8     },
-        { "HairStyleID",            ClientDB::FieldType::I8     },
-        { "HairColorID",            ClientDB::FieldType::I8     },
-        { "FacialHairID",           ClientDB::FieldType::I8     },
-        { "CustomDisplayOptions1",  ClientDB::FieldType::I8     },
-        { "CustomDisplayOptions2",  ClientDB::FieldType::I8     },
-        { "CustomDisplayOptions3",  ClientDB::FieldType::I8     },
-        { "BakedTextureHash",       ClientDB::FieldType::I32    },
-    });
+
+    creatureDisplayInfoExtraStorage.Initialize<Generated::CreatureDisplayInfoExtraRecord>();
     creatureDisplayInfoExtraStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -1024,36 +784,34 @@ bool ClientDBExtractor::ExtractCreatureDisplayInfoExtra(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::CreatureDisplayInfoExtra creatureDisplayInfoExtra;
+        Generated::CreatureDisplayInfoExtraRecord creatureDisplayInfoExtra;
         recordID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
-        creatureDisplayInfoExtra.displayRaceID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 1);
-        creatureDisplayInfoExtra.displaySexID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 2) + 1;
-        creatureDisplayInfoExtra.displayClassID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 3);
+        creatureDisplayInfoExtra.raceID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 1);
+        creatureDisplayInfoExtra.gender = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 2) + 1;
+        creatureDisplayInfoExtra.classID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 3);
         creatureDisplayInfoExtra.skinID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 4);
         creatureDisplayInfoExtra.faceID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 5);
         creatureDisplayInfoExtra.hairStyleID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 6);
         creatureDisplayInfoExtra.hairColorID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 7);
         creatureDisplayInfoExtra.facialHairID = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 8);
         creatureDisplayInfoExtra.flags = db2Parser.GetField<i8>(layout, sectionID, recordID, recordData, 9);
-        creatureDisplayInfoExtra.bakedTextureHash = std::numeric_limits<u32>::max();
+
+        fs::path filePath = "";
         u32 bakedMaterialResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 10);
-
-        const u8* customDisplayOptions = db2Parser.GetFieldPtr<u8>(layout, sectionID, recordID, recordData, 12);
-        memcpy(&creatureDisplayInfoExtra.customDisplayOptions[0], customDisplayOptions, 3 * sizeof(u8));
-
         if (materialResourcesIDToTextureFileDataEntry.contains(bakedMaterialResourcesID))
         {
             u32 textureFileDataID = materialResourcesIDToTextureFileDataEntry[bakedMaterialResourcesID][0];
             
-            auto& textureFileData = textureFileDataStorage.Get<ClientDB::Definitions::TextureFileData>(textureFileDataID);
-            creatureDisplayInfoExtra.bakedTextureHash = textureFileData.textureHash;
+            auto& textureFileData = textureFileDataStorage.Get<Generated::TextureFileDataRecord>(textureFileDataID);
+            filePath = textureFileDataStorage.GetString(textureFileData.texture);
         }
+        creatureDisplayInfoExtra.bakedTexture = creatureDisplayInfoExtraStorage.AddString(filePath.string());
 
         bool didOverride = false;
         creatureDisplayInfoExtraStorage.Replace(recordID, creatureDisplayInfoExtra, didOverride);
     }
 
-    RepopulateFromCopyTable<Definitions::CreatureDisplayInfoExtra>(layout, creatureDisplayInfoExtraStorage);
+    RepopulateFromCopyTable<Generated::CreatureDisplayInfoExtraRecord>(layout, creatureDisplayInfoExtraStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!creatureDisplayInfoExtraStorage.Save(path))
@@ -1074,12 +832,8 @@ bool ClientDBExtractor::ExtractItemDisplayMaterialResources(const std::string& n
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    itemDisplayMaterialResourcesStorage.Initialize( {
-        { "DisplayID",              ClientDB::FieldType::I32 },
-        { "ComponentSection",       ClientDB::FieldType::I8 },
-        { "MaterialResourcesID",    ClientDB::FieldType::I32 }
-    });
+
+    itemDisplayMaterialResourcesStorage.Initialize<Generated::ItemDisplayInfoMaterialResourceRecord>();
     itemDisplayMaterialResourcesStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -1091,8 +845,8 @@ bool ClientDBExtractor::ExtractItemDisplayMaterialResources(const std::string& n
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::ItemDisplayMaterialResources itemDisplayMaterialResource;
-        itemDisplayMaterialResource.displayID = 0;
+        Generated::ItemDisplayInfoMaterialResourceRecord itemDisplayMaterialResource;
+        itemDisplayMaterialResource.displayInfoID = 0;
         u8 componentSection = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 0);
         itemDisplayMaterialResource.materialResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1);
 
@@ -1164,11 +918,11 @@ bool ClientDBExtractor::ExtractItemDisplayMaterialResources(const std::string& n
         DB2::WDC3::Layout::RelationshipMapEntry* relationshipEntry = layout.sections[0].relationshipMap.entries + i;
 
         u32 rowID = *(layout.sections[0].idListData + relationshipEntry->recordIndex);
-        auto& itemDisplayMaterialResource = itemDisplayMaterialResourcesStorage.Get<Definitions::ItemDisplayMaterialResources>(rowID);
-        itemDisplayMaterialResource.displayID = relationshipEntry->foreignID;
+        auto& itemDisplayMaterialResource = itemDisplayMaterialResourcesStorage.Get<Generated::ItemDisplayInfoMaterialResourceRecord>(rowID);
+        itemDisplayMaterialResource.displayInfoID = relationshipEntry->foreignID;
     }
 
-    RepopulateFromCopyTable<Definitions::ItemDisplayMaterialResources>(layout, itemDisplayMaterialResourcesStorage);
+    RepopulateFromCopyTable<Generated::ItemDisplayInfoMaterialResourceRecord>(layout, itemDisplayMaterialResourcesStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!itemDisplayMaterialResourcesStorage.Save(path))
@@ -1188,13 +942,8 @@ bool ClientDBExtractor::ExtractItemDisplayModelMaterialResources(const std::stri
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    itemDisplayModelMaterialResourcesStorage.Initialize( {
-        { "DisplayID",              ClientDB::FieldType::I32    },
-        { "ModelIndex",             ClientDB::FieldType::I8     },
-        { "TextureType",            ClientDB::FieldType::I8     },
-        { "MaterialResourcesID",    ClientDB::FieldType::I32    }
-    });
+
+    itemDisplayModelMaterialResourcesStorage.Initialize<Generated::ItemDisplayInfoModelMaterialResourceRecord>();
     itemDisplayModelMaterialResourcesStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -1206,8 +955,8 @@ bool ClientDBExtractor::ExtractItemDisplayModelMaterialResources(const std::stri
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::ItemDisplayModelMaterialResources itemDisplayModelMaterialResource;
-        itemDisplayModelMaterialResource.displayID = 0;
+        Generated::ItemDisplayInfoModelMaterialResourceRecord itemDisplayModelMaterialResource;
+        itemDisplayModelMaterialResource.displayInfoID = 0;
         itemDisplayModelMaterialResource.modelIndex = static_cast<u8>(db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2));
         itemDisplayModelMaterialResource.textureType = static_cast<u8>(db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1));
         itemDisplayModelMaterialResource.materialResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
@@ -1220,11 +969,11 @@ bool ClientDBExtractor::ExtractItemDisplayModelMaterialResources(const std::stri
         DB2::WDC3::Layout::RelationshipMapEntry* relationshipEntry = layout.sections[0].relationshipMap.entries + i;
 
         u32 rowID = *(layout.sections[0].idListData + relationshipEntry->recordIndex);
-        auto& itemDisplayModelMaterialResource = itemDisplayModelMaterialResourcesStorage.Get<Definitions::ItemDisplayModelMaterialResources>(rowID);
-        itemDisplayModelMaterialResource.displayID = relationshipEntry->foreignID;
+        auto& itemDisplayModelMaterialResource = itemDisplayModelMaterialResourcesStorage.Get<Generated::ItemDisplayInfoModelMaterialResourceRecord>(rowID);
+        itemDisplayModelMaterialResource.displayInfoID = relationshipEntry->foreignID;
     }
 
-    RepopulateFromCopyTable<Definitions::ItemDisplayModelMaterialResources>(layout, itemDisplayModelMaterialResourcesStorage);
+    RepopulateFromCopyTable<Generated::ItemDisplayInfoModelMaterialResourceRecord>(layout, itemDisplayModelMaterialResourcesStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!itemDisplayModelMaterialResourcesStorage.Save(path))
@@ -1244,38 +993,8 @@ bool ClientDBExtractor::ExtractItemDisplayInfo(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    itemDisplayInfoStorage.Initialize( {
-        { "ItemVisual",                 ClientDB::FieldType::I32    },
-        { "ParticleColorID",            ClientDB::FieldType::I32    },
-        { "ItemRangedDisplayInfoID",    ClientDB::FieldType::I32    },
-        { "OverrideSwooshSoundKitID",   ClientDB::FieldType::I32    },
-        { "SheatheTransformMatrixID",   ClientDB::FieldType::I32    },
-        { "StateSpellVisualKitID",      ClientDB::FieldType::I32    },
-        { "SheathedSpellVisualKitID",   ClientDB::FieldType::I32    },
-        { "UnsheathedSpellVisualKitID", ClientDB::FieldType::I32    },
-        { "Flags",                      ClientDB::FieldType::I32    },
-        { "ModelResourcesID1",          ClientDB::FieldType::I32    },
-        { "ModelResourcesID2",          ClientDB::FieldType::I32    },
-        { "MaterialResourcesID1",       ClientDB::FieldType::I32    },
-        { "MaterialResourcesID2",       ClientDB::FieldType::I32    },
-        { "ModelType1",                 ClientDB::FieldType::I32    },
-        { "ModelType2",                 ClientDB::FieldType::I32    },
-        { "GeosetGroup1",               ClientDB::FieldType::I32    },
-        { "GeosetGroup2",               ClientDB::FieldType::I32    },
-        { "GeosetGroup3",               ClientDB::FieldType::I32    },
-        { "GeosetGroup4",               ClientDB::FieldType::I32    },
-        { "GeosetGroup5",               ClientDB::FieldType::I32    },
-        { "GeosetGroup6",               ClientDB::FieldType::I32    },
-        { "GeosetAttachmentGroup1",     ClientDB::FieldType::I32    },
-        { "GeosetAttachmentGroup2",     ClientDB::FieldType::I32    },
-        { "GeosetAttachmentGroup3",     ClientDB::FieldType::I32    },
-        { "GeosetAttachmentGroup4",     ClientDB::FieldType::I32    },
-        { "GeosetAttachmentGroup5",     ClientDB::FieldType::I32    },
-        { "GeosetAttachmentGroup6",     ClientDB::FieldType::I32    },
-        { "GeosetHelmetVis1",           ClientDB::FieldType::I32    },
-        { "GeosetHelmetVis2",           ClientDB::FieldType::I32    },
-    });
+
+    itemDisplayInfoStorage.Initialize<Generated::ItemDisplayInfoRecord>();
     itemDisplayInfoStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -1287,15 +1006,9 @@ bool ClientDBExtractor::ExtractItemDisplayInfo(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::ItemDisplayInfo itemDisplayInfo;
-        itemDisplayInfo.itemVisual = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1);
-        itemDisplayInfo.particleColorID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2);
+        Generated::ItemDisplayInfoRecord itemDisplayInfo;
+
         itemDisplayInfo.itemRangedDisplayInfoID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 3);
-        itemDisplayInfo.overrideSwooshSoundKitID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 4);
-        itemDisplayInfo.sheatheTransformMatrixID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 5);
-        itemDisplayInfo.stateSpellVisualKitID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 6);
-        itemDisplayInfo.sheathedSpellVisualKitID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 7);
-        itemDisplayInfo.unsheathedSpellVisualKitID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 8);
         itemDisplayInfo.flags = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 9);
 
         // modelResourcesID
@@ -1304,28 +1017,24 @@ bool ClientDBExtractor::ExtractItemDisplayInfo(const std::string& name)
 
         // materialResourcesID
         const u32* materialResourcesIDs = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 11);
-        memcpy(&itemDisplayInfo.materialResourcesID[0], materialResourcesIDs, 2 * sizeof(u32));
-
-        // modelType
-        const u32* modelTypes = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 12);
-        memcpy(&itemDisplayInfo.modelType[0], modelTypes, 2 * sizeof(u32));
+        memcpy(&itemDisplayInfo.modelMaterialResourcesID[0], materialResourcesIDs, 2 * sizeof(u32));
 
         // goesetGroup
         const u32* goesetGroups = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 13);
-        memcpy(&itemDisplayInfo.geosetGroup[0], goesetGroups, 6 * sizeof(u32));
-
-        // geosetAttachmentGroup
-        const u32* geosetAttachmentGroups = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 14);
-        memcpy(&itemDisplayInfo.geosetAttachmentGroup[0], geosetAttachmentGroups, 6 * sizeof(u32));
+        for (u32 geosetGroupIndex = 0; geosetGroupIndex < 6; geosetGroupIndex++)
+        {
+            itemDisplayInfo.modelGeosetGroups[geosetGroupIndex] = static_cast<u8>(goesetGroups[geosetGroupIndex]);
+        }
 
         // geosetHelmetVis
         const u32* geosetHelmetVis = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 15);
-        memcpy(&itemDisplayInfo.geosetHelmetVis[0], geosetHelmetVis, 2 * sizeof(u32));
+        itemDisplayInfo.modelGeosetVisIDs[0] = static_cast<u16>(geosetHelmetVis[0]);
+        itemDisplayInfo.modelGeosetVisIDs[1] = static_cast<u16>(geosetHelmetVis[1]);
 
         itemDisplayInfoStorage.Replace(recordID, itemDisplayInfo);
     }
 
-    RepopulateFromCopyTable<Definitions::ItemDisplayInfo>(layout, itemDisplayInfoStorage);
+    RepopulateFromCopyTable<Generated::ItemDisplayInfoRecord>(layout, itemDisplayInfoStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!itemDisplayInfoStorage.Save(path))
@@ -1346,23 +1055,8 @@ bool ClientDBExtractor::ExtractLight(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    lightStorage.Initialize( {
-        { "MapID",          ClientDB::FieldType::I16    },
-        { "PositionX",      ClientDB::FieldType::F32    },
-        { "PositionY",      ClientDB::FieldType::F32    },
-        { "PositionZ",      ClientDB::FieldType::F32    },
-        { "FallOffX",       ClientDB::FieldType::F32    },
-        { "FallOffY",       ClientDB::FieldType::F32    },
-        { "LightParamsID1", ClientDB::FieldType::I16    },
-        { "LightParamsID2", ClientDB::FieldType::I16    },
-        { "LightParamsID3", ClientDB::FieldType::I16    },
-        { "LightParamsID4", ClientDB::FieldType::I16    },
-        { "LightParamsID5", ClientDB::FieldType::I16    },
-        { "LightParamsID6", ClientDB::FieldType::I16    },
-        { "LightParamsID7", ClientDB::FieldType::I16    },
-        { "LightParamsID8", ClientDB::FieldType::I16    }
-    });
+
+    lightStorage.Initialize<Generated::LightRecord>();
     lightStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -1374,7 +1068,7 @@ bool ClientDBExtractor::ExtractLight(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::Light light;
+        Generated::LightRecord light;
         light.mapID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 3);
 
         vec3 position = *db2Parser.GetFieldPtr<vec3>(layout, sectionID, recordID, recordData, 0);
@@ -1383,11 +1077,12 @@ bool ClientDBExtractor::ExtractLight(const std::string& name)
         light.fallOff.y = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 2);
 
         const u16* lightParamIDs = db2Parser.GetFieldPtr<u16>(layout, sectionID, recordID, recordData, 4);
-        memcpy(&light.lightParamsID[0], lightParamIDs, 8 * sizeof(u16));
+        memcpy(&light.paramIDs[0], lightParamIDs, 8 * sizeof(u16));
+
         lightStorage.Replace(recordID, light);
     }
 
-    RepopulateFromCopyTable<Definitions::Light>(layout, lightStorage);
+    RepopulateFromCopyTable<Generated::LightRecord>(layout, lightStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!lightStorage.Save(path))
@@ -1407,16 +1102,8 @@ bool ClientDBExtractor::ExtractLightParams(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    lightParamsStorage.Initialize( {
-        { "Flags",              ClientDB::FieldType::I8    },
-        { "LightSkyboxID",      ClientDB::FieldType::I16    },
-        { "Glow",               ClientDB::FieldType::F32    },
-        { "WaterShallowAlpha",  ClientDB::FieldType::F32    },
-        { "WaterDeepAlpha",     ClientDB::FieldType::F32    },
-        { "OceanShallowAlpha",  ClientDB::FieldType::F32    },
-        { "OceanDeepAlpha",     ClientDB::FieldType::F32    }
-    });
+
+    lightParamsStorage.Initialize<Generated::LightParamRecord>();
     lightParamsStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -1428,19 +1115,21 @@ bool ClientDBExtractor::ExtractLightParams(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::LightParam lightParam;
+        Generated::LightParamRecord lightParam;
         recordID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1);
-        lightParam.flags.highlightSky = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 2);
+        bool highlightSky = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 2);
+        lightParam.flags = 1 << 0 * highlightSky;
         lightParam.lightSkyboxID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 3);
         lightParam.glow = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 5);
-        lightParam.waterShallowAlpha = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 6);
-        lightParam.waterDeepAlpha = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 7);
+        lightParam.riverShallowAlpha = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 6);
+        lightParam.riverDeepAlpha = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 7);
         lightParam.oceanShallowAlpha = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 8);
         lightParam.oceanDeepAlpha = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 9);
+
         lightParamsStorage.Replace(db2RecordIndex, lightParam);
     }
 
-    RepopulateFromCopyTable<Definitions::LightParam>(layout, lightParamsStorage);
+    RepopulateFromCopyTable<Generated::LightParamRecord>(layout, lightParamsStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!lightParamsStorage.Save(path))
@@ -1460,39 +1149,8 @@ bool ClientDBExtractor::ExtractLightData(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    lightDataStorage.Initialize( {
-        { "LightParamID",               ClientDB::FieldType::I16    },
-        { "Timestamp",                  ClientDB::FieldType::I32    },
-        { "DiffuseColor",               ClientDB::FieldType::I32    },
-        { "AmbientColor",               ClientDB::FieldType::I32    },
-        { "SkyTopColor",                ClientDB::FieldType::I32    },
-        { "SkyMiddleColor",             ClientDB::FieldType::I32    },
-        { "SkyBand1Color",              ClientDB::FieldType::I32    },
-        { "SkyBand2Color",              ClientDB::FieldType::I32    },
-        { "SkySmogColor",               ClientDB::FieldType::I32    },
-        { "SkyFogColor",                ClientDB::FieldType::I32    },
-        { "SunColor",                   ClientDB::FieldType::I32    },
-        { "SunFogColor",                ClientDB::FieldType::I32    },
-        { "SunFogStrength",             ClientDB::FieldType::F32    },
-        { "CloudSunColor",              ClientDB::FieldType::I32    },
-        { "CloudEmissiveColor",         ClientDB::FieldType::I32    },
-        { "CloudLayer1AmbientColor",    ClientDB::FieldType::I32    },
-        { "CloudLayer2AmbientColor",    ClientDB::FieldType::I32    },
-        { "OceanShallowColor",          ClientDB::FieldType::I32    },
-        { "OceanDeppColor",             ClientDB::FieldType::I32    },
-        { "RiverShallowColor",          ClientDB::FieldType::I32    },
-        { "RiverDeepColor",             ClientDB::FieldType::I32    },
-        { "ShadowColor",                ClientDB::FieldType::I32    },
-        { "FogEnd",                     ClientDB::FieldType::F32    },
-        { "FogScaler",                  ClientDB::FieldType::F32    },
-        { "FogDensity",                 ClientDB::FieldType::F32    },
-        { "SunFogAngle",                ClientDB::FieldType::F32    },
-        { "CloudDensity",               ClientDB::FieldType::F32    },
-        { "FogHeightColor",             ClientDB::FieldType::I32    },
-        { "FogEndColor",                ClientDB::FieldType::I32    },
-        { "FogEndHeightColor",          ClientDB::FieldType::I32    },
-    });
+
+    lightDataStorage.Initialize<Generated::LightDataRecord>();
     lightDataStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -1504,7 +1162,7 @@ bool ClientDBExtractor::ExtractLightData(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::LightData lightData;
+        Generated::LightDataRecord lightData;
         lightData.lightParamID = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 0);
         u16 timestamp = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 1);
         lightData.timestamp = static_cast<u32>(timestamp) * 30;
@@ -1531,7 +1189,7 @@ bool ClientDBExtractor::ExtractLightData(const std::string& name)
         lightData.shadowColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 19);
         lightData.fogEnd = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 20) / 36;
         lightData.fogScaler = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 21);
-        lightData.fogDensity = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 22);
+        lightData.fogDensity = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 22);
         lightData.cloudDensity = db2Parser.GetField<f32>(layout, sectionID, recordID, recordData, 30);
         lightData.fogHeightColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1);
         lightData.fogEndColor = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 35);
@@ -1540,7 +1198,7 @@ bool ClientDBExtractor::ExtractLightData(const std::string& name)
         lightDataStorage.Replace(recordID, lightData);
     }
 
-    RepopulateFromCopyTable<Definitions::LightData>(layout, lightDataStorage);
+    RepopulateFromCopyTable<Generated::LightDataRecord>(layout, lightDataStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!lightDataStorage.Save(path))
@@ -1560,10 +1218,8 @@ bool ClientDBExtractor::ExtractLightSkybox(const std::string& name)
         return false;
 
     const DB2::WDC3::Layout::Header& header = layout.header;
-    
-    lightSkyboxStorage.Initialize( {
-        { "ModelHash",   ClientDB::FieldType::I32    },
-    });
+
+    lightSkyboxStorage.Initialize<Generated::LightSkyboxRecord>();
     lightSkyboxStorage.Reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
@@ -1575,39 +1231,39 @@ bool ClientDBExtractor::ExtractLightSkybox(const std::string& name)
         if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
             continue;
 
-        Definitions::LightSkybox lightSkybox;
+        Generated::LightSkyboxRecord lightSkybox;
 
-        u32 nameHash = std::numeric_limits<u32>::max();
-        
+        fs::path filePath = "";
+
+        std::string skyboxName = GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 0);
+        std::transform(skyboxName.begin(), skyboxName.end(), skyboxName.begin(), ::tolower);
+
+        u8 flags = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 1);
         u32 fileID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2);
-        if (fileID == 0)
-        {
-            std::string modelPath = GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 0);
 
-            if (cascLoader->ListFileContainsPath(modelPath))
+        if ((flags & 0x2) == 0 || fileID > 0)
+        {
+            if (fileID == 0)
             {
-                if (!modelPath.empty())
+                filePath = fs::path(skyboxName);
+            }
+            else
+            {
+                if (cascLoader->InCascAndListFile(fileID))
                 {
-                    nameHash = StringUtils::fnv1a_32(modelPath.c_str(), modelPath.size());
+                    const std::string& fileStr = cascLoader->GetFilePathFromListFileID(fileID);
+                    filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
                 }
             }
-        }
-        else
-        {
-            if (cascLoader->InCascAndListFile(fileID))
-            {
-                const std::string& fileStr = cascLoader->GetFilePathFromListFileID(fileID);
 
-                fs::path filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
-                nameHash = StringUtils::fnv1a_32(filePath.string().c_str(), filePath.string().size());
-            }
         }
 
-        lightSkybox.modelHash = nameHash;
+        lightSkybox.model = lightSkyboxStorage.AddString(filePath.string());
+        lightSkybox.name = lightSkyboxStorage.AddString(fs::path(skyboxName).filename().replace_extension("").string());
         lightSkyboxStorage.Replace(recordID, lightSkybox);
     }
 
-    RepopulateFromCopyTable<Definitions::LightSkybox>(layout, lightSkyboxStorage);
+    RepopulateFromCopyTable<Generated::LightSkyboxRecord>(layout, lightSkyboxStorage);
 
     std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
     if (!lightSkyboxStorage.Save(path))

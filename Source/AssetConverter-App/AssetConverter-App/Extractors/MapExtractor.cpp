@@ -11,13 +11,14 @@
 #include <Base/Memory/FileWriter.h>
 
 #include <FileFormat/Novus/ClientDB/ClientDB.h>
-#include <FileFormat/Novus/ClientDB/Definitions.h>
 #include <FileFormat/Novus/Map/Map.h>
 #include <FileFormat/Novus/Map/MapChunk.h>
 #include <FileFormat/Novus/Model/ComplexModel.h>
 #include <FileFormat/Warcraft/ADT/Adt.h>
 #include <FileFormat/Warcraft/Parsers/WdtParser.h>
 #include <FileFormat/Warcraft/Parsers/AdtParser.h>
+
+#include <Meta/Generated/ClientDB.h>
 
 #include <enkiTS/TaskScheduler.h>
 #include <glm/gtx/euler_angles.inl>
@@ -67,10 +68,10 @@ void MapExtractor::Process()
     u32 numMapEntries = mapStorage.GetNumRows();
     NC_LOG_INFO("[Map Extractor] Processing {0} maps", numMapEntries);
 
-    mapStorage.Each([&](const u32 id, const ClientDB::Definitions::Map& map) -> bool
+    mapStorage.Each([&](const u32 id, const Generated::MapRecord& map) -> bool
     {
         ZoneScopedN("MapExtractor::Process::Each");
-        const std::string& internalName = mapStorage.GetString(map.internalName);
+        const std::string& internalName = mapStorage.GetString(map.nameInternal);
 
         static char formatBuffer[512] = { 0 };
         i32 length = StringUtils::FormatString(&formatBuffer[0], 512, "world/maps/%s/%s.wdt", internalName.c_str(), internalName.c_str());
@@ -175,17 +176,74 @@ void MapExtractor::Process()
                     }
 
                     Adt::Parser::Context context = { };
-
-                    auto& liquidObjects = ClientDBExtractor::liquidObjectStorage;
-                    auto& liquidTypes = ClientDBExtractor::liquidTypeStorage;
-                    auto& liquidMaterials = ClientDBExtractor::liquidMaterialStorage;
-
-                    context.liquidObjects = &liquidObjects;
-                    context.liquidTypes = &liquidTypes;
-                    context.liquidMaterials = &liquidMaterials;
-
                     if (!adtParser.TryParse(context, rootBuffer, textBuffer, objBuffer, wdt, adt))
                         continue;
+
+                    // Post Processing
+                    {
+                        auto& liquidObjects = ClientDBExtractor::liquidObjectStorage;
+                        auto& liquidTypes = ClientDBExtractor::liquidTypeStorage;
+                        auto& liquidMaterials = ClientDBExtractor::liquidMaterialStorage;
+
+                        u32 numInstances = static_cast<u32>(adt.mh2o.instances.size());
+                        for (u32 i = 0; i < numInstances; i++)
+                        {
+                            auto& liquidInstance = adt.mh2o.instances[i];
+                            u16 liquidVertexFormat = liquidInstance.liquidVertexFormat;
+
+                            if (liquidVertexFormat >= 42)
+                            {
+                                if (liquidInstance.liquidType == 2)
+                                {
+                                    liquidVertexFormat = 2;
+                                }
+                                else
+                                {
+                                    i16 liquidTypeID = -1;
+
+                                    if (liquidObjects.Has(liquidVertexFormat))
+                                    {
+                                        auto& liquidObject = liquidObjects.Get<Generated::LiquidObjectRecord>(liquidVertexFormat);
+                                        liquidTypeID = liquidObject.liquidTypeID;
+                                    }
+                                    else
+                                    {
+                                        liquidTypeID = liquidInstance.liquidType;
+                                    }
+
+                                    if (liquidTypes.Has(liquidTypeID))
+                                    {
+                                        auto& liquidType = liquidTypes.Get<Generated::LiquidTypeRecord>(liquidTypeID);
+
+                                        if (liquidMaterials.Has(liquidType.materialID))
+                                        {
+                                            auto& liquidMaterial = liquidMaterials.Get<Generated::LiquidMaterialRecord>(liquidType.materialID);
+                                            liquidVertexFormat = liquidMaterial.liquidVertexFormat;
+                                        }
+                                    }
+                                }
+
+                            }
+
+                            if (liquidInstance.vertexDataOffset == 0 && liquidInstance.liquidType != 2)
+                            {
+                                liquidVertexFormat = 2;
+                            }
+
+                            if (liquidVertexFormat == 2)
+                            {
+                                liquidInstance.width = 8;
+                                liquidInstance.height = 8;
+                                liquidInstance.offsetX = 0;
+                                liquidInstance.offsetY = 0;
+                            }
+
+                            liquidInstance.liquidVertexFormat = liquidVertexFormat;
+
+                            if (liquidInstance.liquidVertexFormat == 2)
+                                liquidInstance.vertexDataOffset = std::numeric_limits<u32>().max();
+                        }
+                    }
 
                     Map::Chunk chunk = { };
                     std::vector<Terrain::Placement> modelPlacements;
