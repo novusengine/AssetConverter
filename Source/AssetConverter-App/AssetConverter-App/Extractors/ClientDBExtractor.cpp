@@ -16,7 +16,7 @@
 #include <FileFormat/Novus/ClientDB/ClientDB.h>
 #include <FileFormat/Novus/Model/ComplexModel.h>
 
-#include <Meta/Generated/ClientDB.h>
+#include <Meta/Generated/Shared/ClientDB.h>
 
 #include <filesystem>
 namespace fs = std::filesystem;
@@ -1021,7 +1021,7 @@ bool ClientDBExtractor::ExtractItemDisplayInfo(const std::string& name)
 
         // goesetGroup
         const u32* goesetGroups = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 13);
-        for (u32 geosetGroupIndex = 0; geosetGroupIndex < 6; geosetGroupIndex++)
+        for (u32 geosetGroupIndex = 0; geosetGroupIndex < 4; geosetGroupIndex++)
         {
             itemDisplayInfo.modelGeosetGroups[geosetGroupIndex] = static_cast<u8>(goesetGroups[geosetGroupIndex]);
         }

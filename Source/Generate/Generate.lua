@@ -6,7 +6,7 @@ Solution.Util.CreateProject("Generate", "StaticLib", currentProject.BinDir, depe
 -- TODO: This needs to be fixed to work properly on Linux. Dirty fix to make runner build properly.
 if os.target() == "windows" then
     fastuptodate "Off"
-
+    
     local solutionType = BuildSettings:Get("Solution Type")
     postbuildcommands
     {

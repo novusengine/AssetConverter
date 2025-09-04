@@ -64,11 +64,11 @@ i32 main()
 
             nlohmann::ordered_json fallbackJson;
 
-			bool configExists = fs::exists(configPath);
-			if (!configExists)
-			{
-				NC_LOG_CRITICAL("[AssetConverter] Please copy the {0} to this folder.\n\nPress 'Enter' to exit.", CONFIG_NAME);
-			}
+            bool configExists = fs::exists(configPath);
+            if (!configExists)
+            {
+                NC_LOG_CRITICAL("[AssetConverter] Please copy the {0} to this folder.\n\nPress 'Enter' to exit.", CONFIG_NAME);
+            }
 
             if (!JsonUtils::LoadFromPathOrCreate(runtime->json, fallbackJson, configPath))
             {
@@ -81,8 +81,8 @@ i32 main()
                 NC_LOG_CRITICAL("[AssetConverter] Attempted to load outdated {0}. (Config Version : {1}, Expected Version : {2})", CONFIG_NAME.c_str(), currentVersion.c_str(), CONFIG_VERSION.c_str());
             }
 
-			runtime->isInDebugMode = runtime->json["General"]["DebugMode"];
-		}
+            runtime->isInDebugMode = runtime->json["General"]["DebugMode"];
+        }
 
         // Setup Scheduler
         {

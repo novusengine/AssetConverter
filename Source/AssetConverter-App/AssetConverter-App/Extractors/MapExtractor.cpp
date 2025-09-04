@@ -18,7 +18,7 @@
 #include <FileFormat/Warcraft/Parsers/WdtParser.h>
 #include <FileFormat/Warcraft/Parsers/AdtParser.h>
 
-#include <Meta/Generated/ClientDB.h>
+#include <Meta/Generated/Shared/ClientDB.h>
 
 #include <enkiTS/TaskScheduler.h>
 #include <glm/gtx/euler_angles.inl>
