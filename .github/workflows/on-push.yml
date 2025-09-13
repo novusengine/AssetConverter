@@ -16,4 +16,5 @@ jobs:
     uses: novusengine/Workflows/.github/workflows/linux-build.yml@master
     with:
       project: AssetConverter
-      build-types: '["Debug", "RelDebug"]'
+      # possible types: Debug, RelDebug, Release. Comma separated strings in array.
+      build-types: '["Debug"]'
