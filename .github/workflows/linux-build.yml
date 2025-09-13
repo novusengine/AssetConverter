@@ -49,7 +49,6 @@ jobs:
 
     - name: Re-run Premake
       run: |
-        cd ..
         export VULKAN_SDK=/usr/include/vulkan
         premake5 gmake2
 
