@@ -16,3 +16,4 @@ jobs:
     uses: novusengine/Workflows/.github/workflows/linux-build.yml@master
     with:
       project: AssetConverter
+      build-types: Debug,RelDebug
