@@ -9,6 +9,8 @@ jobs:
 
     strategy:
       fail-fast: false
+      matrix:
+        build_type: [Debug]
 
     steps:
     - uses: actions/checkout@v4
@@ -46,6 +48,14 @@ jobs:
       run: |
         cd Build
         make -j$(nproc) -k Gen-Meta
+        
+    - name: Run Meta Generator
+      run: |
+        META_DIR=Submodules/Engine/Source/Meta/Meta
+        rm -rf $META_DIR/Generated
+        Build/Bin/AssetConverter/Engine/${{ matrix.build_type }}/TypeGenerator \
+          $META_DIR/Source \
+          $META_DIR/Generated
 
     - name: Re-run Premake
       run: |
