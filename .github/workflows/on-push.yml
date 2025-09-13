@@ -7,7 +7,9 @@ on:
 jobs:
 #  call-windows-build:
 #    name: Windows Build
-#    uses: ./.github/workflows/win-build.yml
+#    uses: novusengine/Workflows/.github/workflows/win-build.yml@master
+#    with:
+#      project: AssetConverter
 
   call-linux-build:
     name: Linux Build
