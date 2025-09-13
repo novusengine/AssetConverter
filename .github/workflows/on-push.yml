@@ -11,6 +11,6 @@ jobs:
 
   call-linux-build:
     name: Linux Build
-    uses: novusengine/Workflows/.github/workflows/linux-build.yml@main
+    uses: novusengine/Workflows/.github/workflows/linux-build.yml@master
     with:
       project: AssetConverter
