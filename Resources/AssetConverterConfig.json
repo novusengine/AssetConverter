@@ -1,6 +1,6 @@
 {
     "General": {
-        "Version": "0.5",
+        "Version": "0.6",
         "ThreadCount": -1,
         "DebugMode": false
     },
@@ -14,9 +14,23 @@
             "Enabled": true
         },
         "Map": {
+            "Enabled": true
+        },
+        "MapSelection": {
+            "IDs": [],
+            "InternalNames": []
+        },
+        "NavMesh": {
             "Enabled": true,
-            "NavMesh": true,
-            "BlendMaps": true
+            "Validate": true,
+            "UseMonotonePartitioning": false,
+            "UseMedianFilter": true,
+            "DetailSampleDistance": 4.1666666,
+            "MaxEdgeLength": 0.0,
+            "MaxSimplificationError": 1.8,
+            "MinRegionRadius": 16.0,
+            "MergeRegionRadius": 13.333333,
+            "InternalSubtileVoxelSize": 0
         },
         "MapObject": {
             "Enabled": true

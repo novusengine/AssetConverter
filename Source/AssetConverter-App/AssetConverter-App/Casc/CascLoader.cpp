@@ -116,7 +116,7 @@ std::shared_ptr<Bytebuffer> CascLoader::GetFilePartialByID(u32 fileID, u32 size)
     return GetFilePartialByHandle(fileHandle, size);
 }
 
-std::shared_ptr<Bytebuffer> CascLoader::GetFileByPath(std::string filePath)
+std::shared_ptr<Bytebuffer> CascLoader::GetFileByPath(const std::string& filePath)
 {
     void* fileHandle = nullptr;
     if (!CascOpenFile(_storageHandle, filePath.c_str(), 0xFFFFFFFF, CASC_OPEN_BY_NAME | CASC_OVERCOME_ENCRYPTED, &fileHandle))

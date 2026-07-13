@@ -289,6 +289,8 @@ Solution.Util.CreateProject = function(name, projectType, binDir, dependencies, 
     if callback then
         callback()
     end
+
+    vpaths {}
 end
 
 Solution.Util.CreateStaticLib = function(name, binDir, dependencies, callback)
@@ -426,8 +428,8 @@ Solution.Util.SetFilter = function(value, callback)
 
     if callback then
         callback()
-        Solution.Util.ClearFilter()
     end
+    Solution.Util.ClearFilter()
 end
 
 Solution.Util.ClearFilter = function()

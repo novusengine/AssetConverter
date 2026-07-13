@@ -1,4 +1,4 @@
-local mod = Solution.Util.CreateModuleTable("AssetConverter-App", { "base", "fileformat", "meta", "enkits", "casc", "cuttlefish", "jolt", "tracyprofiler", "recastnavigation-recast", "recastnavigation-detour" })
+local mod = Solution.Util.CreateModuleTable("AssetConverter-App", { "base", "fileformat", "filesystem", "meta", "enkits", "casc", "cuttlefish", "jolt", "tracyprofiler", "recastnavigation-recast", "recastnavigation-detour" })
 
 Solution.Util.CreateConsoleApp(mod.Name, Solution.Projects.Current.BinDir, mod.Dependencies, function()
     local defines = { "_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS", "_SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS", "WIN32_LEAN_AND_MEAN" }

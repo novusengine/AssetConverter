@@ -19,6 +19,8 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 
+#include <xxhash/xxhash64.h>
+
 #include <filesystem>
 namespace fs = std::filesystem;
 
@@ -69,13 +71,13 @@ void MapObjectExtractor::Process()
             std::string pathStr = cascLoader->GetFilePathFromListFileID(wmoFileID);
             std::transform(pathStr.begin(), pathStr.end(), pathStr.begin(), ::tolower);
 
-            fs::path outputPath = (runtime->paths.complexModel / pathStr).replace_extension(Model::FILE_EXTENSION);
-            fs::create_directories(outputPath.parent_path());
+            fs::path outputPath = fs::path("model") / pathStr;
+            outputPath.replace_extension(Model::FILE_EXTENSION);
 
             FileListEntry fileListEntry;
             fileListEntry.fileID = wmoFileID;
             fileListEntry.fileName = outputPath.filename().string();
-            fileListEntry.path = outputPath.string();
+            fileListEntry.path = outputPath.generic_string();
 
             fileListQueue.enqueue(fileListEntry);
         }
@@ -94,6 +96,7 @@ void MapObjectExtractor::Process()
     enki::TaskSet convertWMOTask(numRootFiles, [&runtime, &cascLoader, &fileListQueue, &numProcessedFiles, &progressFlags, &printMutex, numRootFiles](enki::TaskSetPartition range, uint32_t threadNum)
     {
         Wmo::Parser wmoParser = { };
+        std::shared_ptr<Bytebuffer> buffer;
 
         FileListEntry fileListEntry;
         while(fileListQueue.try_dequeue(fileListEntry))
@@ -132,7 +135,7 @@ void MapObjectExtractor::Process()
 
                     for (u32 j = 0; j < 3; j++)
                     {
-                        u32 textureFileID = material.textureID[j];
+                        u32 textureFileID = static_cast<u32>(material.textureID[j]);
                         if (textureFileID == std::numeric_limits<u32>().max())
                             continue;
 
@@ -146,14 +149,14 @@ void MapObjectExtractor::Process()
                             continue;
                         }
 
-                        fs::path texturePath = cascFilePath;
+                        fs::path texturePath = fs::path("texture") / cascFilePath;
                         texturePath.replace_extension("dds").make_preferred();
 
                         pathAsString = texturePath.string();
                         std::transform(pathAsString.begin(), pathAsString.end(), pathAsString.begin(), ::tolower);
                         std::replace(pathAsString.begin(), pathAsString.end(), '\\', '/');
 
-                        material.textureID[j] = StringUtils::fnv1a_32(pathAsString.c_str(), pathAsString.length());
+                        material.textureID[j] = XXHash64::hash(pathAsString.c_str(), pathAsString.length(), 0);
                     }
                 }
 
@@ -163,24 +166,25 @@ void MapObjectExtractor::Process()
                     {
                         Model::MapObject::Decoration& decoration = mapObject.decorations[i];
 
-                        u32 decorationFileID = decoration.nameID;
-                        if (decorationFileID == std::numeric_limits<u32>().max())
+                        u32 decorationFileID = static_cast<u32>(decoration.nameID);
+                        if (decorationFileID == std::numeric_limits<u64>().max())
                             continue;
 
                         const std::string& cascFilePath = cascLoader->GetFilePathFromListFileID(decorationFileID);
                         if (cascFilePath.size() == 0)
                         {
-                            decoration.nameID = std::numeric_limits<u32>().max();
+                            decoration.nameID = std::numeric_limits<u64>().max();
                             continue;
                         }
 
-                        fs::path cmodelPath = cascFilePath;
+                        fs::path cmodelPath = fs::path("model") / cascFilePath;
                         cmodelPath.replace_extension(Model::FILE_EXTENSION);
 
                         pathAsString = cmodelPath.string();
                         std::transform(pathAsString.begin(), pathAsString.end(), pathAsString.begin(), ::tolower);
+                        std::replace(pathAsString.begin(), pathAsString.end(), '\\', '/');
 
-                        decoration.nameID = StringUtils::fnv1a_32(pathAsString.c_str(), pathAsString.length());
+                        decoration.nameID = XXHash64::hash(pathAsString.c_str(), pathAsString.length(), 0);
                     }
                 }
             }
@@ -241,27 +245,56 @@ void MapObjectExtractor::Process()
                     }
                 }
             }
+            constexpr size_t MAX_SERIALIZED_MODEL_SIZE = 64 * 1024 * 1024;
+            const size_t serializedSize = cmodel.GetSerializedSize();
+            bool serialized = false;
 
-            bool result = cmodel.Save(fileListEntry.path);
-            if (runtime->isInDebugMode)
+            if (serializedSize <= MAX_SERIALIZED_MODEL_SIZE)
             {
-                if (result)
+                if (!buffer || buffer->size < serializedSize)
+                    buffer = Bytebuffer::BorrowRuntime(serializedSize);
+                else
+                    buffer->Reset();
+
+                serialized = cmodel.Save(buffer);
+                if (serialized && buffer->writtenData != serializedSize)
                 {
-                    NC_LOG_INFO("[MapObject Extractor] Extracted {0}", fileListEntry.fileName);
+                    NC_LOG_ERROR("[MapObject Extractor] Serialized size mismatch for {0} (Expected: {1}, Actual: {2})", fileListEntry.fileName, serializedSize, buffer->writtenData);
+                    serialized = false;
+                }
+            }
+            else
+            {
+                NC_LOG_WARNING("[MapObject Extractor] {0} exceeds the maximum serialized size ({1} bytes)", fileListEntry.fileName, serializedSize);
+            }
+
+            if (serialized)
+            {
+                auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, buffer->writtenData);
+                if (manifest.AddFile(runtime, fileListEntry.path, buffer))
+                {
+                    if (runtime->isInDebugMode)
+                    {
+                        NC_LOG_INFO("[MapObject Extractor] Extracted {0}", fileListEntry.fileName);
+                    }
                 }
                 else
                 {
-                    NC_LOG_WARNING("[MapObject Extractor] Failed to extract {0}", fileListEntry.fileName);
+                    NC_LOG_WARNING("[MapObject Extractor] Failed to add {0} to PACT storage", fileListEntry.fileName);
                 }
+            }
+            else
+            {
+                NC_LOG_WARNING("[MapObject Extractor] Failed to extract {0}", fileListEntry.fileName);
             }
 
             {
                 std::scoped_lock scopedLock(printMutex);
 
-                f32 processedFiles = static_cast<f32>(++numProcessedFiles);
-                f32 progress = (processedFiles / static_cast<f32>(numRootFiles - 1)) * 10.0f;
+                const u32 processedFiles = ++numProcessedFiles;
+                f32 progress = (static_cast<f32>(processedFiles) / static_cast<f32>(numRootFiles)) * 10.0f;
                 u32 bitToCheck = static_cast<u32>(progress);
-                u32 bitMask = 1 << bitToCheck;
+                u32 bitMask = 1u << bitToCheck;
 
                 bool reportStatus = (progressFlags & bitMask) == 0;
                 if (reportStatus)

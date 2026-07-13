@@ -1,5 +1,4 @@
 #include "Runtime.h"
-#include "Blp/BlpConvert.h"
 #include "Casc/CascLoader.h"
 #include "Extractors/ClientDBExtractor.h"
 #include "Extractors/MapExtractor.h"
@@ -19,7 +18,98 @@
 #include <quill/Backend.h>
 
 #include <filesystem>
+#include <fstream>
 namespace fs = std::filesystem;
+
+namespace
+{
+    bool RemoveGeneratedPactFiles(const fs::path& directory, const std::string& extension)
+    {
+        std::error_code error;
+        if (!fs::exists(directory, error))
+        {
+            if (error)
+            {
+                NC_LOG_ERROR("[AssetConverter] Failed to inspect PACT directory {0}: {1}", directory.string(), error.message());
+                return false;
+            }
+
+            return true;
+        }
+
+        for (fs::directory_iterator itr(directory, error); !error && itr != fs::directory_iterator(); itr.increment(error))
+        {
+            const fs::directory_entry& entry = *itr;
+            if (entry.is_regular_file(error) && entry.path().extension() == extension)
+                fs::remove(entry.path(), error);
+
+            if (error)
+                break;
+        }
+
+        if (error)
+        {
+            NC_LOG_ERROR("[AssetConverter] Failed to clean generated PACT files in {0}: {1}", directory.string(), error.message());
+            return false;
+        }
+
+        return true;
+    }
+
+    bool InitializePact(Runtime* runtime)
+    {
+        if (!RemoveGeneratedPactFiles(runtime->paths.pactManifest, PACT::Config::MANIFEST_EXT) ||
+            !RemoveGeneratedPactFiles(runtime->paths.pactData, PACT::Config::DATA_EXT))
+        {
+            NC_LOG_CRITICAL("[AssetConverter] Failed to clean generated PACT files; aborting extraction");
+            return false;
+        }
+
+        std::error_code error;
+        fs::create_directories(runtime->paths.pactRoot, error);
+        if (!error)
+            fs::create_directories(runtime->paths.pactManifest, error);
+        if (!error)
+            fs::create_directories(runtime->paths.pactData, error);
+
+        if (error)
+        {
+            NC_LOG_CRITICAL("[AssetConverter] Failed to create PACT directories: {0}", error.message());
+            return false;
+        }
+
+        PACT::PactRoot& pactRoot = runtime->pactInfo.GetRoot();
+        pactRoot.version = PACT::Config::ROOT_VERSION;
+        pactRoot.featureSet = {};
+
+        std::shared_ptr<Bytebuffer> buffer = Bytebuffer::Borrow<sizeof(PACT::PactRoot)>();
+        if (!buffer->Serialize(pactRoot))
+        {
+            NC_LOG_CRITICAL("[AssetConverter] Failed to serialize the PACT root");
+            return false;
+        }
+
+        const fs::path pactRootPath = fs::absolute(runtime->paths.pactRoot / PACT::Config::ROOT_FILE);
+        std::ofstream rootWriter(pactRootPath, std::ios::out | std::ios::binary | std::ios::trunc);
+        if (!rootWriter.is_open())
+        {
+            NC_LOG_CRITICAL("[AssetConverter] Failed to open the PACT root file {0}", pactRootPath.string());
+            return false;
+        }
+
+        rootWriter.write(reinterpret_cast<const char*>(buffer->GetDataPointer()), static_cast<std::streamsize>(buffer->writtenData));
+        rootWriter.flush();
+        rootWriter.close();
+        if (rootWriter.fail())
+        {
+            NC_LOG_CRITICAL("[AssetConverter] Failed to write the PACT root file {0}", pactRootPath.string());
+            return false;
+        }
+
+        runtime->pactInfo.Initialize();
+        return true;
+    }
+}
 
 i32 main()
 {
@@ -29,6 +119,14 @@ i32 main()
     quill::Logger* logger = quill::Frontend::create_or_get_logger("root", std::move(console_sink), "%(time:<16) LOG_%(log_level:<11) %(message)", "%H:%M:%S.%Qms", quill::Timezone::LocalTime, quill::ClockSourceType::System);
 
     Runtime* runtime = ServiceLocator::SetRuntime(new Runtime());
+    bool isExtractingEnabled = false;
+    bool isDB2Enabled = false;
+    bool isMapEnabled = false;
+    bool isNavMeshEnabled = false;
+    bool isMapObjectEnabled = false;
+    bool isComplexModelEnabled = false;
+    bool isTextureEnabled = false;
+    bool rebuildPact = false;
 
     // Setup Runtime
     {
@@ -38,27 +136,18 @@ i32 main()
 
             paths.executable = fs::current_path();
             paths.data = paths.executable / "Data";
-            paths.clientDB = paths.data / "ClientDB";
-            paths.texture = paths.data / "Texture";
-            paths.textureBlendMap = paths.texture / "blendmaps";
-            paths.map = paths.data / "Map";
+            paths.pactRoot = paths.data / "Pact";
+            paths.pactManifest = paths.pactRoot / PACT::Config::MANIFEST_DIR;
+            paths.pactData = paths.pactRoot / PACT::Config::DATA_DIR;
             paths.navMesh = paths.data / "NavMesh";
-            paths.mapObject = paths.data / "MapObject";
-            paths.complexModel = paths.data / "ComplexModel";
 
             fs::create_directories(paths.data);
-            fs::create_directories(paths.clientDB);
-            fs::create_directories(paths.texture);
-            fs::create_directories(paths.textureBlendMap);
-            fs::create_directories(paths.map);
             fs::create_directories(paths.navMesh);
-            fs::create_directories(paths.mapObject);
-            fs::create_directories(paths.complexModel);
         }
 
         // Setup Json
         {
-            static const std::string CONFIG_VERSION = "0.5";
+            static const std::string CONFIG_VERSION = "0.6";
             static const std::string CONFIG_NAME = "AssetConverterConfig.json";
 
             fs::path configPath = runtime->paths.executable / CONFIG_NAME;
@@ -84,6 +173,21 @@ i32 main()
             }
 
             runtime->isInDebugMode = runtime->json["General"]["DebugMode"];
+
+            isExtractingEnabled = runtime->json["Extraction"]["Enabled"];
+            isDB2Enabled = runtime->json["Extraction"]["ClientDB"]["Enabled"];
+            isMapEnabled = runtime->json["Extraction"]["Map"]["Enabled"];
+            isNavMeshEnabled = runtime->json["Extraction"]["NavMesh"]["Enabled"];
+            isMapObjectEnabled = runtime->json["Extraction"]["MapObject"]["Enabled"];
+            isComplexModelEnabled = runtime->json["Extraction"]["ComplexModel"]["Enabled"];
+            isTextureEnabled = runtime->json["Extraction"]["Texture"]["Enabled"];
+            rebuildPact = isExtractingEnabled &&
+                (isDB2Enabled || isMapEnabled || isMapObjectEnabled || isComplexModelEnabled || isTextureEnabled);
+        }
+
+        if (!rebuildPact && isExtractingEnabled && isNavMeshEnabled)
+        {
+            NC_LOG_INFO("[AssetConverter] NavMesh-only extraction selected; preserving existing PACT storage");
         }
 
         // Setup Scheduler
@@ -122,56 +226,74 @@ i32 main()
         {
             case CascLoader::Result::Success:
             {
+                if (rebuildPact && !InitializePact(runtime))
+                {
+                    cascLoader->Close();
+                    return 1;
+                }
+
                 NC_LOG_INFO("");
 
-                bool isExtractingEnabled = runtime->json["Extraction"]["Enabled"];
                 if (isExtractingEnabled)
                 {
                     NC_LOG_INFO("[AssetConverter] Processing Extractors...");
+                    bool mapDataAvailable = isDB2Enabled;
 
                     // DB2
-                    bool isDB2Enabled = runtime->json["Extraction"]["ClientDB"]["Enabled"];
                     if (isDB2Enabled)
                     {
                         NC_LOG_INFO("[AssetConverter] Processing ClientDB Extractor...");
                         ClientDBExtractor::Process();
                         NC_LOG_INFO("[AssetConverter] ClientDB Extractor Finished\n");
                     }
-
-                    // Map
-                    bool isMapEnabled = runtime->json["Extraction"]["Map"]["Enabled"];
-                    if (isMapEnabled)
+                    else if (isMapEnabled || isNavMeshEnabled)
                     {
-                        NC_LOG_INFO("[AssetConverter] Processing Map Extractor...");
-                        MapExtractor::Process();
-                        NC_LOG_INFO("[AssetConverter] Map Extractor Finished\n");
+                        NC_LOG_INFO("[AssetConverter] Loading Map data required by the Map/NavMesh extractor...");
+                        mapDataAvailable = ClientDBExtractor::LoadMapStorage(isMapEnabled);
+                        if (!mapDataAvailable)
+                        {
+                            NC_LOG_ERROR("[AssetConverter] Failed to load Map data required for map extraction");
+                        }
                     }
 
-                    // Map Object
-                    bool isMapObjectEnabled = runtime->json["Extraction"]["MapObject"]["Enabled"];
-                    if (isMapObjectEnabled)
+                    // Map / NavMesh
+                    if ((isMapEnabled || isNavMeshEnabled) && mapDataAvailable)
                     {
-                        NC_LOG_INFO("[AssetConverter] Processing MapObject Extractor...");
-                        MapObjectExtractor::Process();
-                        NC_LOG_INFO("[AssetConverter] MapObject Extractor Finished\n");
+                        NC_LOG_INFO("[AssetConverter] Processing Map/NavMesh Extractor...");
+                        MapExtractor::Process(isMapEnabled, isNavMeshEnabled);
+                        NC_LOG_INFO("[AssetConverter] Map/NavMesh Extractor Finished\n");
                     }
 
-                    // Complex Model
-                    bool isComplexModelEnabled = runtime->json["Extraction"]["ComplexModel"]["Enabled"];
-                    if (isComplexModelEnabled)
+                    // Map Object / Complex Model
                     {
-                        NC_LOG_INFO("[AssetConverter] Processing ComplexModel Extractor...");
-                        ComplexModelExtractor::Process();
-                        NC_LOG_INFO("[AssetConverter] ComplexModel Extractor Finished\n");
+                        if (isMapObjectEnabled)
+                        {
+                            NC_LOG_INFO("[AssetConverter] Processing MapObject Extractor...");
+                            MapObjectExtractor::Process();
+                            NC_LOG_INFO("[AssetConverter] MapObject Extractor Finished\n");
+                        }
+
+                        if (isComplexModelEnabled)
+                        {
+                            NC_LOG_INFO("[AssetConverter] Processing ComplexModel Extractor...");
+                            ComplexModelExtractor::Process();
+                            NC_LOG_INFO("[AssetConverter] ComplexModel Extractor Finished\n");
+                        }
                     }
 
                     // Texture
-                    bool isTextureEnabled = runtime->json["Extraction"]["Texture"]["Enabled"];
                     if (isTextureEnabled)
                     {
                         NC_LOG_INFO("[AssetConverter] Processing Texture Extractor...");
                         TextureExtractor::Process();
                         NC_LOG_INFO("[AssetConverter] Texture Extractor Finished\n");
+                    }
+
+                    if (rebuildPact && !runtime->pactInfo.Finalize())
+                    {
+                        NC_LOG_CRITICAL("[AssetConverter] Failed to finalize PACT storage");
+                        cascLoader->Close();
+                        return 1;
                     }
                 }
 

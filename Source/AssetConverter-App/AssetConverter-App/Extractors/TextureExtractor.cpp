@@ -49,13 +49,9 @@ void TextureExtractor::Process()
         std::string pathStr = itr.first;
         std::transform(pathStr.begin(), pathStr.end(), pathStr.begin(), ::tolower);
     
-        fs::path outputPath = (runtime->paths.texture / pathStr).replace_extension("dds");
-    
-        if (fs::exists(outputPath))
-            continue;
-    
-        fs::create_directories(outputPath.parent_path());
-    
+        fs::path outputPath = fs::path("texture") / pathStr;
+        outputPath.replace_extension("dds");
+
         FileListEntry& fileListEntry = fileList.emplace_back();
         fileListEntry.fileID = itr.second;
         fileListEntry.fileName = outputPath.filename().string();
@@ -72,19 +68,46 @@ void TextureExtractor::Process()
 
     enki::TaskSet convertTexturesTask(numFiles, [&](enki::TaskSetPartition range, uint32_t threadNum)
     {
+        std::vector<u8> outBytes;
+
         for (u32 i = range.start; i < range.end; i++)
         {
             const FileListEntry& fileListEntry = fileList[i];
 
             std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByID(fileListEntry.fileID);
             if (!buffer)
-                return;
+            {
+                runtime->pactInfo.MarkFailed();
+                NC_LOG_ERROR("[Texture Extractor] Failed to load {0} from CASC", fileListEntry.path);
+            }
+            else
+            {
+                bool generateMips = !fileListEntry.flags.isInterfaceFile;
+                bool useCompression = fileListEntry.flags.useCompression;
 
-            bool generateMips = !fileListEntry.flags.isInterfaceFile;
-            bool useCompression = fileListEntry.flags.useCompression;
-            blpConvert.ConvertBLP(buffer->GetDataPointer(), buffer->writtenData, fileListEntry.path, generateMips, useCompression, ivec2(256, 256));
+                outBytes.clear();
+                outBytes.reserve(buffer->writtenData);
+                if (blpConvert.ConvertBLPToBuffer(buffer->GetDataPointer(), buffer->writtenData, outBytes, generateMips, useCompression, ivec2(256, 256)))
+                {
+                    std::string textureName = fileListEntry.path;
+                    std::transform(textureName.begin(), textureName.end(), textureName.begin(), ::tolower);
+                    std::replace(textureName.begin(), textureName.end(), '\\', '/');
 
-            f32 progress = (static_cast<f32>(numFilesConverted++) / static_cast<f32>(numFiles - 1)) * 10.0f;
+                    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, outBytes.size());
+                    if (!manifest.AddFile(runtime, textureName, outBytes))
+                    {
+                        NC_LOG_WARNING("[Texture Extractor] Failed to add {0} to PACT storage", textureName);
+                    }
+                }
+                else
+                {
+                    // runtime->pactInfo.MarkFailed();
+                    NC_LOG_ERROR("[Texture Extractor] Failed to convert {0}", fileListEntry.path);
+                }
+            }
+
+            const u32 processedFiles = ++numFilesConverted;
+            f32 progress = (static_cast<f32>(processedFiles) / static_cast<f32>(numFiles)) * 10.0f;
             u32 bitToCheck = static_cast<u32>(progress);
             u32 bitMask = 1u << bitToCheck;
 

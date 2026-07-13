@@ -16,6 +16,48 @@
 
 namespace BLP
 {
+    static constexpr u32 BLP2_SIGNATURE =
+        static_cast<u32>('B') |
+        (static_cast<u32>('L') << 8u) |
+        (static_cast<u32>('P') << 16u) |
+        (static_cast<u32>('2') << 24u);
+
+    static void DecodeBc4Block(ByteStream& stream, u8 (&decodedValues)[16])
+    {
+        u8 values[8];
+        const u32 value0 = stream.read<u8>();
+        const u32 value1 = stream.read<u8>();
+
+        values[0] = static_cast<u8>(value0);
+        values[1] = static_cast<u8>(value1);
+
+        if (value0 > value1)
+        {
+            for (u32 i = 0; i < 6; i++)
+            {
+                values[i + 2] = static_cast<u8>(((6u - i) * value0 + (1u + i) * value1) / 7u);
+            }
+        }
+        else
+        {
+            for (u32 i = 0; i < 4; i++)
+            {
+                values[i + 2] = static_cast<u8>(((4u - i) * value0 + (1u + i) * value1) / 5u);
+            }
+
+            values[6] = 0;
+            values[7] = 255;
+        }
+
+        u64 lookupValue = 0;
+        stream.read(&lookupValue, 6);
+        for (u32 i = 0; i < 16; i++)
+        {
+            const u8 lookupIndex = static_cast<u8>((lookupValue >> (i * 3u)) & 7u);
+            decodedValues[i] = values[lookupIndex];
+        }
+    }
+
     namespace _detail
     {
         static const uint32_t alphaLookup1[] = { 0x00, 0xFF };
@@ -43,29 +85,29 @@ namespace BLP
         BlpHeader header = stream.read<BlpHeader>();
 
         // Sanity Check : Ensure the stream contains a proper BLP header
-        if (header.signature != static_cast<int>('BLP2') && header.version != 1)
+        if (header.signature != BLP2_SIGNATURE || header.version != 1)
             return;
 
         cuttlefish::Texture::Format textureFormat = cuttlefish::Texture::Format::R32G32B32;
         Format format = GetFormat(header);
 
-        // TODO : Pursche needs to figure out how to read BC5.
-        if (format == Format::BC5)
-            return;
-
-        // Santiy Check : Ensure we don't try to read BLP files with no content.
+        // Sanity Check : Ensure we don't try to read BLP files with no content.
         if (header.sizes[0] == 0)
             return;
 
         std::vector<uint32_t> imageData;
         LoadFirstLayer(header, stream, imageData);
 
-        bool enableHeightSizeCompressionOverride = overrideCompressionSize.x != -1;
-        bool enableWidthSizeCompressionOverride = overrideCompressionSize.y != -1;
+        bool enableWidthSizeCompressionOverride = overrideCompressionSize.x != -1;
+        bool enableHeightSizeCompressionOverride = overrideCompressionSize.y != -1;
         bool enableCompression = useCompression || ((enableWidthSizeCompressionOverride && header.width >= (uint32_t)overrideCompressionSize.x) || (enableHeightSizeCompressionOverride && header.height >= (uint32_t)overrideCompressionSize.y));
 
         // Use compression if specified or if the width/height is >= 256
-        if (enableCompression)
+        if (enableCompression && format == Format::BC5)
+        {
+            textureFormat = cuttlefish::Texture::Format::BC5;
+        }
+        else if (enableCompression)
         {
             textureFormat = cuttlefish::Texture::Format::BC3;
         }
@@ -106,6 +148,99 @@ namespace BLP
         texture.save(outputPath.c_str(), cuttlefish::Texture::FileType::DDS);
     }
 
+    bool BlpConvert::ConvertBLPToBuffer(unsigned char* inputBytes, std::size_t size, std::vector<u8>& outBuffer, bool generateMipmaps, bool useCompression, ivec2 overrideCompressionSize)
+    {
+        outBuffer.clear();
+        if (!inputBytes || size < sizeof(BlpHeader))
+            return false;
+
+        ByteStream stream(inputBytes, size);
+        BlpHeader header = stream.read<BlpHeader>();
+
+        // Sanity Check : Ensure the stream contains a proper BLP header
+        if (header.signature != BLP2_SIGNATURE || header.version != 1)
+            return false;
+
+        cuttlefish::Texture::Format textureFormat = cuttlefish::Texture::Format::R32G32B32;
+        Format format = GetFormat(header);
+
+        if (format == Format::UNKNOWN)
+            return false;
+
+        // Sanity Check : Ensure we don't try to read BLP files with no content.
+        if (header.sizes[0] == 0)
+            return false;
+
+        std::vector<uint32_t> imageData;
+        try
+        {
+            LoadFirstLayer(header, stream, imageData);
+        }
+        catch (const std::exception&)
+        {
+            return false;
+        }
+        const size_t pixelCount = static_cast<size_t>(header.width) * header.height;
+        if (imageData.size() < pixelCount)
+            return false;
+
+        bool enableWidthSizeCompressionOverride = overrideCompressionSize.x != -1;
+        bool enableHeightSizeCompressionOverride = overrideCompressionSize.y != -1;
+        bool enableCompression = useCompression || ((enableWidthSizeCompressionOverride && header.width >= (uint32_t)overrideCompressionSize.x) || (enableHeightSizeCompressionOverride && header.height >= (uint32_t)overrideCompressionSize.y));
+
+        // Use compression if specified or if the width/height is >= 256
+        if (enableCompression && format == Format::BC5)
+        {
+            textureFormat = cuttlefish::Texture::Format::BC5;
+        }
+        else if (enableCompression)
+        {
+            textureFormat = cuttlefish::Texture::Format::BC3;
+        }
+        else
+        {
+            textureFormat = cuttlefish::Texture::Format::R8G8B8A8;
+        }
+
+        cuttlefish::Image image;
+        if (!image.initialize(cuttlefish::Image::Format::RGBA8, header.width, header.height))
+            return false;
+
+        for (u32 y = 0; y < header.height; y++)
+        {
+            void* scanLine = image.scanline(y);
+            i32 pixelDataOffset = (y * header.width);
+
+            memcpy(scanLine, &imageData[pixelDataOffset], header.width * sizeof(u32));
+        }
+
+        if (header.compression == 1)
+        {
+            image.swizzle(cuttlefish::Image::Channel::Blue, cuttlefish::Image::Channel::Green, cuttlefish::Image::Channel::Red, cuttlefish::Image::Channel::Alpha);
+        }
+
+        cuttlefish::Texture texture(cuttlefish::Texture::Dimension::Dim2D, header.width, header.height);
+        if (!texture.setImage(image))
+            return false;
+
+        if (generateMipmaps)
+        {
+            texture.generateMipmaps();
+        }
+
+        if (!texture.convert(textureFormat, cuttlefish::Texture::Type::UNorm, cuttlefish::Texture::Quality::Normal, cuttlefish::Texture::Alpha::Standard, cuttlefish::Texture::ColorMask(), 1))
+            return false;
+
+        auto result = texture.save(outBuffer, cuttlefish::Texture::FileType::DDS);
+        if (result != cuttlefish::Texture::SaveResult::Success)
+        {
+            outBuffer.clear();
+            return false;
+        }
+
+        return true;
+    }
+
     cuttlefish::Image::Format GetInputFormat(const InputFormat& inputFormat)
     {
         switch (inputFormat)
@@ -128,6 +263,7 @@ namespace BLP
             case Format::BC1:  return cuttlefish::Texture::Format::BC1_RGB;
             case Format::BC2:  return cuttlefish::Texture::Format::BC2;
             case Format::BC3:  return cuttlefish::Texture::Format::BC3;
+            case Format::BC5:  return cuttlefish::Texture::Format::BC5;
             default: assert(false);
         }
         return cuttlefish::Texture::Format::R8G8B8;
@@ -178,6 +314,62 @@ namespace BLP
         texture.save(outputPath.c_str(), cuttlefish::Texture::FileType::DDS);
     }
 
+    bool BlpConvert::ConvertRawToBuffer(uint32_t width, uint32_t height, uint32_t layers, unsigned char* inputBytes, std::size_t size, InputFormat inputFormat, Format outputFormat, std::vector<u8>& outBuffer, bool generateMipmaps)
+    {
+        outBuffer.clear();
+        if (!inputBytes || size == 0 || width == 0 || height == 0 || layers == 0)
+            return false;
+
+        cuttlefish::Image::Format cuttleFishInputFormat = GetInputFormat(inputFormat);
+        cuttlefish::Texture::Format cuttleFishOutputFormat = GetOutputFormat(outputFormat);
+
+        cuttlefish::Texture::Dimension dimension = cuttlefish::Texture::Dimension::Dim2D;
+        if (layers != 1)
+        {
+            dimension = cuttlefish::Texture::Dimension::Dim3D;
+        }
+
+        cuttlefish::Image image;
+        if (!image.initialize(cuttleFishInputFormat, width, height))
+            return false;
+
+        cuttlefish::Texture texture(dimension, width, height, layers);
+
+        for (uint32_t layer = 0; layer < layers; layer++)
+        {
+            uint32_t layerOffset = (layer * (height * width));
+
+            for (uint32_t y = 0; y < height; y++)
+            {
+                void* scanLine = image.scanline(y);
+                uint32_t pixelDataOffset = layerOffset + (y * width);
+                uint32_t* pixelColor = &reinterpret_cast<uint32_t*>(inputBytes)[pixelDataOffset];
+
+                memcpy(scanLine, pixelColor, width * sizeof(uint32_t));
+            }
+
+            if (!texture.setImage(image, 0, layer))
+                return false;
+        }
+
+        if (generateMipmaps)
+        {
+            texture.generateMipmaps();
+        }
+
+        if (!texture.convert(cuttleFishOutputFormat, cuttlefish::Texture::Type::UNorm, cuttlefish::Texture::Quality::Normal, cuttlefish::Texture::Alpha::Standard, cuttlefish::Texture::ColorMask(), 1))
+            return false;
+
+        auto result = texture.save(outBuffer, cuttlefish::Texture::FileType::DDS);
+        if (result != cuttlefish::Texture::SaveResult::Success)
+        {
+            outBuffer.clear();
+            return false;
+        }
+
+        return true;
+    }
+
     void BlpConvert::LoadFirstLayer(const BlpHeader& header, ByteStream& data, std::vector<uint32_t>& imageData) const
     {
         Format format = GetFormat(header);
@@ -203,6 +395,7 @@ namespace BLP
             case BC1:
             case BC2:
             case BC3:
+            case BC5:
                 ParseCompressed(header, data, imageData);
                 break;
 
@@ -436,6 +629,7 @@ namespace BLP
             case BC1: return &BlpConvert::Dxt1GetBlock;
             case BC2: return &BlpConvert::Dxt3GetBlock;
             case BC3: return &BlpConvert::Dxt5GetBlock;
+            case BC5: return &BlpConvert::Bc5GetBlock;
             default: throw BlpConvertException("Unrecognized dxt format");
         }
     }
@@ -476,40 +670,8 @@ namespace BLP
 
     void BlpConvert::Dxt5GetBlock(ByteStream& stream, std::vector<uint32_t>& blockData, const size_t& blockOffset) const
     {
-        uint8_t alphaValues[8];
-        uint8_t alphaLookup[16];
-
-        uint32_t alpha1 = (uint32_t)stream.read<uint8_t>();
-        uint32_t alpha2 = (uint32_t)stream.read<uint8_t>();
-
-        alphaValues[0] = (uint8_t)alpha1;
-        alphaValues[1] = (uint8_t)alpha2;
-
-        if (alpha1 > alpha2)
-        {
-            for (uint32_t i = 0u; i < 6u; ++i)
-            {
-                alphaValues[i + 2u] = (uint8_t)(((6u - i) * alpha1 + (1u + i) * alpha2) / 7u);
-            }
-        }
-        else
-        {
-            for (uint32_t i = 0u; i < 4u; ++i)
-            {
-                alphaValues[i + 2u] = (uint8_t)(((4u - i) * alpha1 + (1u + i) * alpha2) / 5u);
-            }
-
-            alphaValues[6] = 0;
-            alphaValues[7] = 255;
-        }
-
-        uint64_t lookupValue = 0;
-        stream.read(&lookupValue, 6);
-
-        for (uint32_t i = 0u; i < 16u; ++i)
-        {
-            alphaLookup[i] = (uint8_t)((lookupValue >> (i * 3u)) & 7u);
-        }
+        u8 alphaValues[16];
+        DecodeBc4Block(stream, alphaValues);
 
         _detail::RgbDataArray colors[4];
         ReadDXTColors(stream, colors, false);
@@ -518,8 +680,24 @@ namespace BLP
         for (uint32_t i = 0u; i < 16u; ++i)
         {
             uint8_t idx = (uint8_t)((indices >> (2u * i)) & 3u);
-            uint32_t alphaVal = (uint32_t)alphaValues[alphaLookup[i]];
+            uint32_t alphaVal = alphaValues[i];
             blockData[blockOffset + i] = (colors[idx].data.color & 0x00FFFFFFu) | (alphaVal << 24u);
+        }
+    }
+
+    void BlpConvert::Bc5GetBlock(ByteStream& stream, std::vector<uint32_t>& blockData, const size_t& blockOffset) const
+    {
+        u8 redValues[16];
+        u8 greenValues[16];
+        DecodeBc4Block(stream, redValues);
+        DecodeBc4Block(stream, greenValues);
+
+        for (u32 i = 0; i < 16; i++)
+        {
+            blockData[blockOffset + i] =
+                (static_cast<u32>(redValues[i]) << 16u) |
+                (static_cast<u32>(greenValues[i]) << 8u) |
+                0xFF000000u;
         }
     }
 

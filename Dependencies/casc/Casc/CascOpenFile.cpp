@@ -25,8 +25,8 @@ TCascFile::TCascFile(TCascStorage * ahs, PCASC_CKEY_ENTRY apCKeyEntry)
     FilePointer = 0;
     pCKeyEntry = apCKeyEntry;
     SpanCount = (pCKeyEntry->SpanCount != 0) ? pCKeyEntry->SpanCount : 1;
+    bAllowDownloading = false;
     bVerifyIntegrity = false;
-    bDownloadFileIf = false;
     bCloseFileStream = false;
     bFreeCKeyEntries = false;
 
@@ -193,14 +193,14 @@ bool OpenFileByCKeyEntry(TCascStorage * hs, PCASC_CKEY_ENTRY pCKeyEntry, DWORD d
     TCascFile * hf = NULL;
     DWORD dwErrCode = ERROR_FILE_NOT_FOUND;
 
-    // If the CKey entry is NULL, we consider the file non-existant
+    // If the CKey entry is NULL, we consider the file non-existent
     if(pCKeyEntry != NULL)
     {
         // Create the file handle structure
         if((hf = new TCascFile(hs, pCKeyEntry)) != NULL)
         {
             hf->bVerifyIntegrity   = (dwOpenFlags & CASC_STRICT_DATA_CHECK)  ? true : false;
-            hf->bDownloadFileIf    = (hs->dwFeatures & CASC_FEATURE_ONLINE)  ? true : false;
+            hf->bAllowDownloading  = (hs->dwFeatures & CASC_FEATURE_ONLINE)  ? true : false;
             hf->bOvercomeEncrypted = (dwOpenFlags & CASC_OVERCOME_ENCRYPTED) ? true : false;
             dwErrCode = ERROR_SUCCESS;
         }

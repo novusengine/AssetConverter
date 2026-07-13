@@ -27,7 +27,7 @@ public:
 
     std::shared_ptr<Bytebuffer> GetFileByID(u32 fileID);
     std::shared_ptr<Bytebuffer> GetFilePartialByID(u32 fileID, u32 size);
-    std::shared_ptr<Bytebuffer> GetFileByPath(std::string filePath);
+    std::shared_ptr<Bytebuffer> GetFileByPath(const std::string& filePath);
     std::shared_ptr<Bytebuffer> GetFileByListFilePath(const std::string& filePath);
     bool FileExistsInCasc(u32 fileID);
     bool ListFileContainsID(u32 fileID) { return _listFile.HasFileWithID(fileID); }

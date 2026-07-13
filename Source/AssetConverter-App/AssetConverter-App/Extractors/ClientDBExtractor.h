@@ -10,14 +10,19 @@ class ClientDBExtractor
 {
 public:
     static void Process();
+    static bool LoadMapStorage(bool loadLiquidData);
 
 private:
     static bool ExtractModelFileData(const std::string& name);
     static bool ExtractTextureFileData(const std::string& name);
     static bool ExtractMap(const std::string& name);
+    static bool ExtractMapData(const std::string& name, bool writePact);
     static bool ExtractLiquidObject(const std::string& name);
+    static bool ExtractLiquidObjectData(const std::string& name, bool writePact);
     static bool ExtractLiquidType(const std::string& name);
+    static bool ExtractLiquidTypeData(const std::string& name, bool writePact);
     static bool ExtractLiquidMaterial(const std::string& name);
+    static bool ExtractLiquidMaterialData(const std::string& name, bool writePact);
     static bool ExtractCinematicCamera(const std::string& name);
     static bool ExtractCinematicSequence(const std::string& name);
     static bool ExtractAnimationData(const std::string& name);

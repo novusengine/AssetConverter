@@ -18,6 +18,8 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 
+#include <xxhash/xxhash64.h>
+
 #include <filesystem>
 namespace fs = std::filesystem;
 
@@ -45,10 +47,12 @@ void ComplexModelExtractor::Process()
         {
             u32 m2FileID = m2FileIDs[index];
     
+            // Known source files that currently fail M2 conversion.
             switch (m2FileID)
             {
                 case 5779493:
                 case 5779495:
+                case 6705204:
                     continue;
     
                 default:
@@ -61,13 +65,13 @@ void ComplexModelExtractor::Process()
             std::string pathStr = cascLoader->GetFilePathFromListFileID(m2FileID);
             std::transform(pathStr.begin(), pathStr.end(), pathStr.begin(), ::tolower);
     
-            fs::path outputPath = (runtime->paths.complexModel / pathStr).replace_extension(Model::FILE_EXTENSION);
-            fs::create_directories(outputPath.parent_path());
+            fs::path outputPath = fs::path("model") / pathStr;
+            outputPath.replace_extension(Model::FILE_EXTENSION);
     
             FileListEntry fileListEntry;
             fileListEntry.fileID = m2FileID;
             fileListEntry.fileName = outputPath.filename().string();
-            fileListEntry.path = outputPath.string();
+            fileListEntry.path = outputPath.generic_string();
     
             fileListQueue.enqueue(fileListEntry);
         }
@@ -86,6 +90,7 @@ void ComplexModelExtractor::Process()
     enki::TaskSet convertM2Task(numModelsToProcess, [&runtime, &cascLoader, &fileListQueue, &numProcessedFiles, &progressFlags, &printMutex, numModelsToProcess](enki::TaskSetPartition range, uint32_t threadNum)
     {
         M2::Parser m2Parser = {};
+        std::shared_ptr<Bytebuffer> buffer;
 
         FileListEntry fileListEntry;
         while(fileListQueue.try_dequeue(fileListEntry))
@@ -118,8 +123,8 @@ void ComplexModelExtractor::Process()
                 {
                     Model::ComplexModel::Texture& texture = cmodel.textures[i];
 
-                    u32 fileID = texture.textureHash; // This has not been converted to a textureHash yet.
-                    texture.textureHash = std::numeric_limits<u32>().max(); // Default to invalid
+                    u32 fileID = static_cast<u32>(texture.textureHash); // This has not been converted to a textureHash yet.
+                    texture.textureHash = std::numeric_limits<u64>().max(); // Default to invalid
 
                     if (fileID == 0 || fileID == std::numeric_limits<u32>().max())
                         continue;
@@ -131,14 +136,14 @@ void ComplexModelExtractor::Process()
                     if (cascFilePath.size() == 0)
                         continue;
 
-                    fs::path texturePath = cascFilePath;
+                    fs::path texturePath = fs::path("texture") / cascFilePath;
                     texturePath.replace_extension("dds").make_preferred();
 
                     std::string textureName = texturePath.string();
                     std::transform(textureName.begin(), textureName.end(), textureName.begin(), ::tolower);
                     std::replace(textureName.begin(), textureName.end(), '\\', '/');
 
-                    texture.textureHash = StringUtils::fnv1a_32(textureName.c_str(), textureName.length());
+                    texture.textureHash = XXHash64::hash(textureName.c_str(), textureName.length(), 0);
                 }
 
                 // if build physics shapes
@@ -195,25 +200,56 @@ void ComplexModelExtractor::Process()
                 }
             }
 
-            bool result = cmodel.Save(fileListEntry.path);
-            if (runtime->isInDebugMode)
+            constexpr size_t MAX_SERIALIZED_MODEL_SIZE = 64 * 1024 * 1024;
+            const size_t serializedSize = cmodel.GetSerializedSize();
+            bool serialized = false;
+
+            if (serializedSize <= MAX_SERIALIZED_MODEL_SIZE)
             {
-                if (result)
+                if (!buffer || buffer->size < serializedSize)
+                    buffer = Bytebuffer::BorrowRuntime(serializedSize);
+                else
+                    buffer->Reset();
+
+                serialized = cmodel.Save(buffer);
+                if (serialized && buffer->writtenData != serializedSize)
                 {
-                    NC_LOG_INFO("[ComplexModel Extractor] Extracted {0}", fileListEntry.fileName);
+                    NC_LOG_ERROR("[ComplexModel Extractor] Serialized size mismatch for {0} (Expected: {1}, Actual: {2})", fileListEntry.fileName, serializedSize, buffer->writtenData);
+                    serialized = false;
+                }
+            }
+            else
+            {
+                NC_LOG_WARNING("[ComplexModel Extractor] {0} exceeds the maximum serialized size ({1} bytes)", fileListEntry.fileName, serializedSize);
+            }
+
+            if (serialized)
+            {
+                auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, buffer->writtenData);
+                if (manifest.AddFile(runtime, fileListEntry.path, buffer))
+                {
+                    if (runtime->isInDebugMode)
+                    {
+                        NC_LOG_INFO("[ComplexModel Extractor] Extracted {0}", fileListEntry.fileName);
+                    }
                 }
                 else
                 {
-                    NC_LOG_WARNING("[ComplexModel Extractor] Failed to extract {0}", fileListEntry.fileName);
+                    NC_LOG_WARNING("[ComplexModel Extractor] Failed to add {0} to PACT storage", fileListEntry.fileName);
                 }
+            }
+            else
+            {
+                NC_LOG_WARNING("[ComplexModel Extractor] Failed to extract {0}", fileListEntry.fileName);
             }
 
             {
                 std::scoped_lock scopedLock(printMutex);
                 
-                f32 progress = (static_cast<f32>(numProcessedFiles++) / static_cast<f32>(numModelsToProcess - 1)) * 10.0f;
+                const u32 processedFiles = ++numProcessedFiles;
+                f32 progress = (static_cast<f32>(processedFiles) / static_cast<f32>(numModelsToProcess)) * 10.0f;
                 u32 bitToCheck = static_cast<u32>(progress);
-                u32 bitMask = 1 << bitToCheck;
+                u32 bitMask = 1u << bitToCheck;
                 
                 bool reportStatus = (progressFlags & bitMask) == 0;
                 if (reportStatus)

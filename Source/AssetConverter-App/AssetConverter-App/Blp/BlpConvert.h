@@ -66,7 +66,9 @@ namespace BLP
 
     public:
         void ConvertBLP(unsigned char* inputBytes, std::size_t size, const std::string& outputPath, bool generateMipmaps, bool useCompression, ivec2 overrideCompressionSize = ivec2(-1, -1));
+        bool ConvertBLPToBuffer(unsigned char* inputBytes, std::size_t size, std::vector<u8>& outBuffer, bool generateMipmaps, bool useCompression, ivec2 overrideCompressionSize = ivec2(-1, -1));
         void ConvertRaw(uint32_t width, uint32_t height, uint32_t layers, unsigned char* inputBytes, std::size_t size, InputFormat inputFormat, Format outputFormat, const std::string& outputPath, bool generateMipmaps);
+        bool ConvertRawToBuffer(uint32_t width, uint32_t height, uint32_t layers, unsigned char* inputBytes, std::size_t size, InputFormat inputFormat, Format outputFormat, std::vector<u8>& outBuffer, bool generateMipmaps);
 
     private:
         void LoadFirstLayer(const BlpHeader& header, ByteStream& data, std::vector<uint32_t>& imageData) const;
@@ -86,6 +88,7 @@ namespace BLP
         void Dxt1GetBlock(ByteStream& stream, std::vector<uint32_t>& blockData, const size_t& blockOffset) const;
         void Dxt3GetBlock(ByteStream& stream, std::vector<uint32_t>& blockData, const size_t& blockOffset) const;
         void Dxt5GetBlock(ByteStream& stream, std::vector<uint32_t>& blockData, const size_t& blockOffset) const;
+        void Bc5GetBlock(ByteStream& stream, std::vector<uint32_t>& blockData, const size_t& blockOffset) const;
 
         void ReadDXTColors(ByteStream& stream, _detail::RgbDataArray* colors, bool preMultipliedAlpha, bool use4Colors = false) const;
 

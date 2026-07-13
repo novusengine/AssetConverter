@@ -5,11 +5,11 @@
 
 #include <Base/Container/StringTable.h>
 #include <Base/Math/Geometry.h>
-#include <Base/Memory/FileWriter.h>
 #include <Base/Util/DebugHandler.h>
 #include <Base/Util/StringUtils.h>
 
 #include <FileFormat/Shared.h>
+#include <FileFormat/Novus/FileHeader.h>
 #include <FileFormat/Warcraft/DB2/DB2Definitions.h>
 #include <FileFormat/Warcraft/DB2/Wdc3.h>
 #include <FileFormat/Warcraft/Parsers/Wdc3Parser.h>
@@ -74,7 +74,7 @@ void ClientDBExtractor::Process()
     for (u32 i = 0; i < _extractionEntries.size(); i++)
     {
         const ExtractionEntry& entry = _extractionEntries[i];
-    
+
         if (entry.function(entry.name))
         {
             NC_LOG_INFO("[ClientDBExtractor] Extracted (\"{0}\" : \"{1}\")", entry.name, entry.description);
@@ -86,6 +86,18 @@ void ClientDBExtractor::Process()
     }
 }
 
+bool ClientDBExtractor::LoadMapStorage(bool loadLiquidData)
+{
+    const bool mapLoaded = ExtractMapData("Map", false);
+    if (!loadLiquidData)
+        return mapLoaded;
+
+    const bool liquidObjectLoaded = ExtractLiquidObjectData("LiquidObject", false);
+    const bool liquidTypeLoaded = ExtractLiquidTypeData("LiquidType", false);
+    const bool liquidMaterialLoaded = ExtractLiquidMaterialData("LiquidMaterial", false);
+    return mapLoaded && liquidObjectLoaded && liquidTypeLoaded && liquidMaterialLoaded;
+}
+
 void FixPathExtension(std::string& path)
 {
     if (path.length() == 0)
@@ -93,15 +105,17 @@ void FixPathExtension(std::string& path)
 
     if (StringUtils::EndsWith(path, ".mdx"))
     {
-        path = path.substr(0, path.length() - 4) + Model::FILE_EXTENSION;
+        path = "model/" + path.substr(0, path.length() - 4) + Model::FILE_EXTENSION;
+        std::transform(path.begin(), path.end(), path.begin(), ::tolower);
     }
     else if (StringUtils::EndsWith(path, ".m2"))
     {
-        path = path.substr(0, path.length() - 3) + Model::FILE_EXTENSION;
+        path = "model/" + path.substr(0, path.length() - 3) + Model::FILE_EXTENSION;
+        std::transform(path.begin(), path.end(), path.begin(), ::tolower);
     }
     else if (StringUtils::EndsWith(path, ".blp"))
     {
-        path = path.substr(0, path.length() - 4) + ".dds";
+        path = "texture/" + path.substr(0, path.length() - 4) + ".dds";
         std::transform(path.begin(), path.end(), path.begin(), ::tolower);
     }
 }
@@ -190,15 +204,15 @@ bool ClientDBExtractor::ExtractModelFileData(const std::string& name)
         u32 modelFileID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
         modelFileData.flags = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 1);
         modelFileData.modelResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 3);
-        
+
         fs::path filePath = "";
         if (cascLoader->InCascAndListFile(modelFileID))
         {
             const std::string& fileStr = cascLoader->GetFilePathFromListFileID(modelFileID);
-            filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
+            filePath = fs::path("model") / fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
         }
 
-        modelFileData.model = modelFileDataStorage.AddString(filePath.string());
+        modelFileData.model = modelFileDataStorage.AddString(filePath.generic_string());
 
         auto& modelFileDataEntries = modelResourcesIDToModelFileDataEntry[modelFileData.modelResourcesID];
         modelFileDataEntries.push_back(modelFileID);
@@ -208,11 +222,20 @@ bool ClientDBExtractor::ExtractModelFileData(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::ModelFileDataRecord>(layout, modelFileDataStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!modelFileDataStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = modelFileDataStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!modelFileDataStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 
 bool ClientDBExtractor::ExtractTextureFileData(const std::string& name)
@@ -251,10 +274,10 @@ bool ClientDBExtractor::ExtractTextureFileData(const std::string& name)
         if (cascLoader->InCascAndListFile(textureFileID))
         {
             const std::string& fileStr = cascLoader->GetFilePathFromListFileID(textureFileID);
-            filePath = fs::path(fileStr).replace_extension("dds");
+            filePath = fs::path("texture") / fs::path(fileStr).replace_extension("dds");
         }
 
-        textureFileData.texture = textureFileDataStorage.AddString(filePath.string());
+        textureFileData.texture = textureFileDataStorage.AddString(filePath.generic_string());
 
         auto& textureFileDataIDs = materialResourcesIDToTextureFileDataEntry[textureFileData.materialResourcesID];
         textureFileDataIDs.push_back(id);
@@ -264,14 +287,28 @@ bool ClientDBExtractor::ExtractTextureFileData(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::TextureFileDataRecord>(layout, textureFileDataStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!textureFileDataStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = textureFileDataStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!textureFileDataStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 
 bool ClientDBExtractor::ExtractMap(const std::string& name)
+{
+    return ExtractMapData(name, true);
+}
+
+bool ClientDBExtractor::ExtractMapData(const std::string& name, bool writePact)
 {
     CascLoader* cascLoader = ServiceLocator::GetCascLoader();
 
@@ -331,14 +368,31 @@ bool ClientDBExtractor::ExtractMap(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::MapRecord>(layout, mapStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!mapStorage.Save(path))
+    if (!writePact)
+        return true;
+
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = mapStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!mapStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 
 bool ClientDBExtractor::ExtractLiquidObject(const std::string& name)
+{
+    return ExtractLiquidObjectData(name, true);
+}
+
+bool ClientDBExtractor::ExtractLiquidObjectData(const std::string& name, bool writePact)
 {
     CascLoader* cascLoader = ServiceLocator::GetCascLoader();
 
@@ -372,13 +426,31 @@ bool ClientDBExtractor::ExtractLiquidObject(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::LiquidObjectRecord>(layout, liquidObjectStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!liquidObjectStorage.Save(path))
+    if (!writePact)
+        return true;
+
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = liquidObjectStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!liquidObjectStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
+
 bool ClientDBExtractor::ExtractLiquidType(const std::string& name)
+{
+    return ExtractLiquidTypeData(name, true);
+}
+
+bool ClientDBExtractor::ExtractLiquidTypeData(const std::string& name, bool writePact)
 {
     CascLoader* cascLoader = ServiceLocator::GetCascLoader();
 
@@ -439,13 +511,31 @@ bool ClientDBExtractor::ExtractLiquidType(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::LiquidTypeRecord>(layout, liquidTypeStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!liquidTypeStorage.Save(path))
+    if (!writePact)
+        return true;
+
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = liquidTypeStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!liquidTypeStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
+
 bool ClientDBExtractor::ExtractLiquidMaterial(const std::string& name)
+{
+    return ExtractLiquidMaterialData(name, true);
+}
+
+bool ClientDBExtractor::ExtractLiquidMaterialData(const std::string& name, bool writePact)
 {
     CascLoader* cascLoader = ServiceLocator::GetCascLoader();
 
@@ -479,11 +569,23 @@ bool ClientDBExtractor::ExtractLiquidMaterial(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::LiquidMaterialRecord>(layout, liquidMaterialStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!liquidMaterialStorage.Save(path))
+    if (!writePact)
+        return true;
+
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = liquidMaterialStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!liquidMaterialStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 
 bool ClientDBExtractor::ExtractCinematicCamera(const std::string& name)
@@ -522,20 +624,29 @@ bool ClientDBExtractor::ExtractCinematicCamera(const std::string& name)
         if (cascLoader->InCascAndListFile(fileID))
         {
             const std::string& fileStr = cascLoader->GetFilePathFromListFileID(fileID);
-            filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
+            filePath = fs::path("model") / fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
         }
-        cinematicCamera.model = cinematicCameraStorage.AddString(filePath.string());
+        cinematicCamera.model = cinematicCameraStorage.AddString(filePath.generic_string());
 
         cinematicCameraStorage.Replace(recordID, cinematicCamera);
     }
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::CinematicCameraRecord>(layout, cinematicCameraStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!cinematicCameraStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = cinematicCameraStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!cinematicCameraStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 bool ClientDBExtractor::ExtractCinematicSequence(const std::string& name)
 {
@@ -571,11 +682,20 @@ bool ClientDBExtractor::ExtractCinematicSequence(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::CinematicSequenceRecord>(layout, cinematicSequenceStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!cinematicSequenceStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = cinematicSequenceStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!cinematicSequenceStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 
 bool ClientDBExtractor::ExtractAnimationData(const std::string& name)
@@ -616,11 +736,20 @@ bool ClientDBExtractor::ExtractAnimationData(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::AnimationDataRecord>(layout, animationDataStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!animationDataStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = animationDataStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!animationDataStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 
 bool ClientDBExtractor::ExtractCreatureModelData(const std::string& name)
@@ -673,21 +802,30 @@ bool ClientDBExtractor::ExtractCreatureModelData(const std::string& name)
         if (cascLoader->InCascAndListFile(fileID))
         {
             const std::string& fileStr = cascLoader->GetFilePathFromListFileID(fileID);
-            filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
+            filePath = fs::path("model") / fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
         }
 
-        creatureModelData.model = creatureModelDataStorage.AddString(filePath.string());
+        creatureModelData.model = creatureModelDataStorage.AddString(filePath.generic_string());
 
         creatureModelDataStorage.Replace(recordID, creatureModelData);
     }
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::CreatureModelDataRecord>(layout, creatureModelDataStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!creatureModelDataStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = creatureModelDataStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!creatureModelDataStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 bool ClientDBExtractor::ExtractCreatureDisplayInfo(const std::string& name)
 {
@@ -741,11 +879,11 @@ bool ClientDBExtractor::ExtractCreatureDisplayInfo(const std::string& name)
             if (textureFileID > 0 && cascLoader->InCascAndListFile(textureFileID))
             {
                 const std::string& fileStr = cascLoader->GetFilePathFromListFileID(textureFileID);
-                filePath = fs::path(fileStr).replace_extension("dds");
-                creatureDisplayInfo.textureVariations[textureVariantIndex] = creatureDisplayInfoStorage.AddString(filePath.string());
+                filePath = fs::path("texture") / fs::path(fileStr).replace_extension("dds");
+                creatureDisplayInfo.textureVariations[textureVariantIndex] = creatureDisplayInfoStorage.AddString(filePath.generic_string());
             }
 
-            creatureDisplayInfo.textureVariations[textureVariantIndex] = creatureDisplayInfoStorage.AddString(filePath.string());
+            creatureDisplayInfo.textureVariations[textureVariantIndex] = creatureDisplayInfoStorage.AddString(filePath.generic_string());
         }
 
         creatureDisplayInfoStorage.Replace(recordID, creatureDisplayInfo);
@@ -753,11 +891,20 @@ bool ClientDBExtractor::ExtractCreatureDisplayInfo(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::CreatureDisplayInfoRecord>(layout, creatureDisplayInfoStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!creatureDisplayInfoStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = creatureDisplayInfoStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!creatureDisplayInfoStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 bool ClientDBExtractor::ExtractCreatureDisplayInfoExtra(const std::string& name)
 {
@@ -801,11 +948,11 @@ bool ClientDBExtractor::ExtractCreatureDisplayInfoExtra(const std::string& name)
         if (materialResourcesIDToTextureFileDataEntry.contains(bakedMaterialResourcesID))
         {
             u32 textureFileDataID = materialResourcesIDToTextureFileDataEntry[bakedMaterialResourcesID][0];
-            
+
             auto& textureFileData = textureFileDataStorage.Get<MetaGen::Shared::ClientDB::TextureFileDataRecord>(textureFileDataID);
             filePath = textureFileDataStorage.GetString(textureFileData.texture);
         }
-        creatureDisplayInfoExtra.bakedTexture = creatureDisplayInfoExtraStorage.AddString(filePath.string());
+        creatureDisplayInfoExtra.bakedTexture = creatureDisplayInfoExtraStorage.AddString(filePath.generic_string());
 
         bool didOverride = false;
         creatureDisplayInfoExtraStorage.Replace(recordID, creatureDisplayInfoExtra, didOverride);
@@ -813,11 +960,20 @@ bool ClientDBExtractor::ExtractCreatureDisplayInfoExtra(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::CreatureDisplayInfoExtraRecord>(layout, creatureDisplayInfoExtraStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!creatureDisplayInfoExtraStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = creatureDisplayInfoExtraStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!creatureDisplayInfoExtraStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 
 bool ClientDBExtractor::ExtractItemDisplayMaterialResources(const std::string& name)
@@ -852,61 +1008,61 @@ bool ClientDBExtractor::ExtractItemDisplayMaterialResources(const std::string& n
 
         switch (componentSection)
         {
-            case 0: // ArmUpper
-            {
-                componentSection = 5;
-                break;
-            }
-            case 1: // ArmLower
-            {
-                componentSection = 6;
-                break;
-            }
-            case 2: // Hand
-            {
-                componentSection = 7;
-                break;
-            }
-            case 3: // TorsoUpper
-            {
-                componentSection = 3;
-                break;
-            }
-            case 4: // TorsoLower
-            {
-                componentSection = 4;
-                break;
-            }
-            case 5: // LegUpper
-            {
-                componentSection = 8;
-                break;
-            }
-            case 6: // LegLower
-            {
-                componentSection = 9;
-                break;
-            }
-            case 7: // Foot
-            {
-                componentSection = 10;
-                break;
-            }
-            case 9: // ScalpUpper
-            {
-                componentSection = 1;
-                break;
-            }
-            case 10: // ScalpLower
-            {
-                componentSection = 2;
-                break;
-            }
+        case 0: // ArmUpper
+        {
+            componentSection = 5;
+            break;
+        }
+        case 1: // ArmLower
+        {
+            componentSection = 6;
+            break;
+        }
+        case 2: // Hand
+        {
+            componentSection = 7;
+            break;
+        }
+        case 3: // TorsoUpper
+        {
+            componentSection = 3;
+            break;
+        }
+        case 4: // TorsoLower
+        {
+            componentSection = 4;
+            break;
+        }
+        case 5: // LegUpper
+        {
+            componentSection = 8;
+            break;
+        }
+        case 6: // LegLower
+        {
+            componentSection = 9;
+            break;
+        }
+        case 7: // Foot
+        {
+            componentSection = 10;
+            break;
+        }
+        case 9: // ScalpUpper
+        {
+            componentSection = 1;
+            break;
+        }
+        case 10: // ScalpLower
+        {
+            componentSection = 2;
+            break;
+        }
 
-            default:
-            {
-                componentSection = 255;
-            }
+        default:
+        {
+            componentSection = 255;
+        }
         }
 
         itemDisplayMaterialResource.componentSection = componentSection;
@@ -924,11 +1080,20 @@ bool ClientDBExtractor::ExtractItemDisplayMaterialResources(const std::string& n
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::ItemDisplayInfoMaterialResourceRecord>(layout, itemDisplayMaterialResourcesStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!itemDisplayMaterialResourcesStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = itemDisplayMaterialResourcesStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!itemDisplayMaterialResourcesStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 bool ClientDBExtractor::ExtractItemDisplayModelMaterialResources(const std::string& name)
 {
@@ -975,11 +1140,20 @@ bool ClientDBExtractor::ExtractItemDisplayModelMaterialResources(const std::stri
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::ItemDisplayInfoModelMaterialResourceRecord>(layout, itemDisplayModelMaterialResourcesStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!itemDisplayModelMaterialResourcesStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = itemDisplayModelMaterialResourcesStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!itemDisplayModelMaterialResourcesStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 bool ClientDBExtractor::ExtractItemDisplayInfo(const std::string& name)
 {
@@ -1036,11 +1210,20 @@ bool ClientDBExtractor::ExtractItemDisplayInfo(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::ItemDisplayInfoRecord>(layout, itemDisplayInfoStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!itemDisplayInfoStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = itemDisplayInfoStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!itemDisplayInfoStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 
 bool ClientDBExtractor::ExtractLight(const std::string& name)
@@ -1084,11 +1267,20 @@ bool ClientDBExtractor::ExtractLight(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::LightRecord>(layout, lightStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!lightStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = lightStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!lightStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 bool ClientDBExtractor::ExtractLightParams(const std::string& name)
 {
@@ -1131,11 +1323,20 @@ bool ClientDBExtractor::ExtractLightParams(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::LightParamRecord>(layout, lightParamsStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!lightParamsStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = lightParamsStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!lightParamsStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 bool ClientDBExtractor::ExtractLightData(const std::string& name)
 {
@@ -1200,11 +1401,20 @@ bool ClientDBExtractor::ExtractLightData(const std::string& name)
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::LightDataRecord>(layout, lightDataStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!lightDataStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = lightDataStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!lightDataStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 bool ClientDBExtractor::ExtractLightSkybox(const std::string& name)
 {
@@ -1252,22 +1462,31 @@ bool ClientDBExtractor::ExtractLightSkybox(const std::string& name)
                 if (cascLoader->InCascAndListFile(fileID))
                 {
                     const std::string& fileStr = cascLoader->GetFilePathFromListFileID(fileID);
-                    filePath = fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
+                    filePath = fs::path("model") / fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
                 }
             }
 
         }
 
-        lightSkybox.model = lightSkyboxStorage.AddString(filePath.string());
+        lightSkybox.model = lightSkyboxStorage.AddString(filePath.generic_string());
         lightSkybox.name = lightSkyboxStorage.AddString(fs::path(skyboxName).filename().replace_extension("").string());
         lightSkyboxStorage.Replace(recordID, lightSkybox);
     }
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::LightSkyboxRecord>(layout, lightSkyboxStorage);
 
-    std::string path = (ServiceLocator::GetRuntime()->paths.clientDB / name).replace_extension(ClientDB::FILE_EXTENSION).string();
-    if (!lightSkyboxStorage.Save(path))
+    Runtime* runtime = ServiceLocator::GetRuntime();
+
+    size_t size = lightSkyboxStorage.GetSerializedSize();
+    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
+    if (!lightSkyboxStorage.Save(storageBuffer))
         return false;
 
-    return true;
+    fs::path path = fs::path("clientdb") / name;
+    path.replace_extension(ClientDB::FILE_EXTENSION);
+
+    std::string pactPath = path.generic_string();
+    StringUtils::ToLower(pactPath);
+    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
+    return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
