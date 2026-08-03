@@ -8,6 +8,7 @@ local dependencies =
     "casc/casc.lua",
     "cuttlefish/cuttlefish.lua",
     "jolt/jolt.lua",
+    "meshoptimizer/meshoptimizer.lua",
 }
 
 for k,v in pairs(dependencies) do

@@ -5,6 +5,7 @@
 #include "AssetConverter-App/Blp/BlpConvert.h"
 #include "AssetConverter-App/Casc/CascLoader.h"
 #include "AssetConverter-App/Extractors/ClientDBExtractor.h"
+#include "AssetConverter-App/Model/ModelV2Allocation.h"
 #include "AssetConverter-App/Util/JoltStream.h"
 #include "AssetConverter-App/Util/ServiceLocator.h"
 
@@ -16,6 +17,7 @@
 #include <FileFormat/Novus/Map/Map.h>
 #include <FileFormat/Novus/Map/MapChunk.h>
 #include <FileFormat/Novus/Model/ComplexModel.h>
+#include <FileFormat/Novus/Model/Model.h>
 #include <FileFormat/Warcraft/ADT/Adt.h>
 #include <FileFormat/Warcraft/Parsers/WdtParser.h>
 #include <FileFormat/Warcraft/Parsers/AdtParser.h>
@@ -244,6 +246,8 @@ void MapExtractor::Process(bool extractMapAssets, bool generateNavMesh)
         }
 
         Map::MapHeader mapHeader = { };
+        u64 globalModelV2AssetID = FileFormat::INVALID_ASSET_ID;
+        std::vector<ModelV2MapAllocationAccumulator> chunkModelAllocations(Terrain::CHUNK_NUM_PER_MAP);
         mapHeader.flags.UseMapObjectAsBase = wdt.mphd.flags.UseGlobalMapObj;
 
         if (mapHeader.flags.UseMapObjectAsBase)
@@ -269,6 +273,7 @@ void MapExtractor::Process(bool extractMapAssets, bool generateNavMesh)
             {
                 placement.uniqueID = placementInfo.uniqueID;
                 placement.nameHash = placementInfo.fileID;
+                placement.doodadSet = placementInfo.doodadSet;
                 placement.position = CoordinateSpaces::PlacementPosToNovus(placementInfo.position);
 
                 vec3 placementRotation = glm::radians(CoordinateSpaces::PlacementRotToNovus(placementInfo.rotation));
@@ -289,6 +294,11 @@ void MapExtractor::Process(bool extractMapAssets, bool generateNavMesh)
 
             u64 nameHash = XXHash64::hash(wmoPathStr.c_str(), wmoPathStr.size(), 0);
             placement.nameHash = nameHash;
+
+            std::filesystem::path modelV2Path = std::filesystem::path("model") / std::filesystem::path(filePath).replace_extension(FileFormat::Model::FILE_EXTENSION);
+            std::string modelV2PathStr = modelV2Path.generic_string();
+            std::transform(modelV2PathStr.begin(), modelV2PathStr.end(), modelV2PathStr.begin(), ::tolower);
+            globalModelV2AssetID = XXHash64::hash(modelV2PathStr.c_str(), modelV2PathStr.size(), 0);
         }
         else
         {
@@ -304,7 +314,7 @@ void MapExtractor::Process(bool extractMapAssets, bool generateNavMesh)
             moodycamel::ConcurrentQueue<u64> mapChunkHashes;
             NavMesh::SourceStore navSources;
 
-            enki::TaskSet convertMapTask(Terrain::CHUNK_NUM_PER_MAP, [&runtime, &cascLoader, &map, &wdt, &internalName, &mapChunkHashes, &navSources, extractMapAssets, generateNavMesh, id](enki::TaskSetPartition range, uint32_t threadNum)
+            enki::TaskSet convertMapTask(Terrain::CHUNK_NUM_PER_MAP, [&runtime, &cascLoader, &map, &wdt, &internalName, &mapChunkHashes, &navSources, &chunkModelAllocations, extractMapAssets, generateNavMesh, id](enki::TaskSetPartition range, uint32_t threadNum)
             {
                 ZoneScopedN("MapExtractor::Process::Each::ConvertMapTask");
                 Adt::Parser adtParser = { };
@@ -450,31 +460,43 @@ void MapExtractor::Process(bool extractMapAssets, bool generateNavMesh)
 
                     // Post Processing
                     {
+                        ModelV2MapAllocationAccumulator chunkModelAllocation;
                         for (u32 i = 0; i < modelPlacements.size(); i++)
                         {
                             Terrain::Placement& placementInfo = modelPlacements[i];
+                            u64 modelV2AssetID = FileFormat::INVALID_ASSET_ID;
 
                             if (placementInfo.nameHash == 0 ||
                                 placementInfo.nameHash == std::numeric_limits<u64>().max())
-                                continue;
-
-                            u32 placementFileID = static_cast<u32>(placementInfo.nameHash);
-                            if (!cascLoader->InCascAndListFile(placementFileID))
                             {
-                                NC_LOG_ERROR("Skipped model placement because file doesn't exist");
+                                chunkModelAllocation.AddRootPlacement(modelV2AssetID, placementInfo.doodadSet);
                                 continue;
                             }
 
-                            const std::string& modelPathStr = cascLoader->GetFilePathFromListFileID(placementFileID);
-                            std::filesystem::path modelPath = std::filesystem::path("model") / std::filesystem::path(modelPathStr).replace_extension(Model::FILE_EXTENSION);
-                            modelPath.make_preferred();
-                            std::string modelPathHashStr = modelPath.string();
-                            std::transform(modelPathHashStr.begin(), modelPathHashStr.end(), modelPathHashStr.begin(), ::tolower);
-                            std::replace(modelPathHashStr.begin(), modelPathHashStr.end(), '\\', '/');
+                            const u32 placementFileID = static_cast<u32>(placementInfo.nameHash);
+                            if (!cascLoader->InCascAndListFile(placementFileID))
+                            {
+                                NC_LOG_ERROR("Skipped model placement because file doesn't exist");
+                            }
+                            else
+                            {
+                                const std::string& sourceModelPath = cascLoader->GetFilePathFromListFileID(placementFileID);
+                                std::filesystem::path legacyModelPath = std::filesystem::path("model") / std::filesystem::path(sourceModelPath).replace_extension(Model::FILE_EXTENSION);
+                                std::string legacyModelPathStr = legacyModelPath.generic_string();
+                                std::transform(legacyModelPathStr.begin(), legacyModelPathStr.end(), legacyModelPathStr.begin(), ::tolower);
+                                placementInfo.nameHash = XXHash64::hash(legacyModelPathStr.c_str(), legacyModelPathStr.size(), 0);
 
-                            u64 nameHash = XXHash64::hash(modelPathHashStr.c_str(), modelPathHashStr.size(), 0);
-                            placementInfo.nameHash = nameHash;
+                                std::filesystem::path modelV2Path = std::filesystem::path("model") / std::filesystem::path(sourceModelPath).replace_extension(FileFormat::Model::FILE_EXTENSION);
+                                std::string modelV2PathStr = modelV2Path.generic_string();
+                                std::transform(modelV2PathStr.begin(), modelV2PathStr.end(), modelV2PathStr.begin(), ::tolower);
+                                modelV2AssetID = XXHash64::hash(modelV2PathStr.c_str(), modelV2PathStr.size(), 0);
+                            }
+
+                            chunkModelAllocation.AddRootPlacement(modelV2AssetID, placementInfo.doodadSet);
                         }
+
+                        chunk.modelAllocationHints = chunkModelAllocation.GetHints();
+                        chunkModelAllocations[newChunkID] = std::move(chunkModelAllocation);
 
                         // 0 = r, 1 = g, 2 = b, 3 = a
                         u32 swizzleMap[Terrain::CHUNK_ALPHAMAP_CELL_NUM_CHANNELS] =
@@ -822,6 +844,18 @@ void MapExtractor::Process(bool extractMapAssets, bool generateNavMesh)
 
         if (!extractMapAssets)
             return true;
+
+        ModelV2MapAllocationAccumulator mapModelAllocation;
+        if (mapHeader.flags.UseMapObjectAsBase)
+        {
+            mapModelAllocation.AddRootPlacement(globalModelV2AssetID, mapHeader.placement.doodadSet);
+        }
+        else
+        {
+            for (const ModelV2MapAllocationAccumulator& chunkAllocation : chunkModelAllocations)
+                mapModelAllocation.Merge(chunkAllocation);
+        }
+        mapHeader.modelAllocationHints = mapModelAllocation.GetHints();
 
         std::shared_ptr<Bytebuffer> buffer = Bytebuffer::Borrow<1048576>();
         if (mapHeader.Save(buffer))

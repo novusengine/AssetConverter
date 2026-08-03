@@ -136,9 +136,6 @@ bool PactManifestInfo::AddFile(Runtime* runtime, const std::string& path, std::v
 
 bool PactManifestInfo::Finalize()
 {
-    const size_t size = GetSerializedSize();
-    std::shared_ptr<Bytebuffer> buffer = Bytebuffer::BorrowRuntime(size);
-
     dataWriter.flush();
     const bool dataWriteSucceeded = dataWriter.good();
     dataWriter.close();
@@ -147,6 +144,19 @@ bool PactManifestInfo::Finalize()
         NC_LOG_ERROR("PactBuilder : Failed to finalize manifest data file (\"{0}\")", dataPath.string());
         return false;
     }
+
+    // A reservation can roll over to a new pack before AddFile discovers that
+    // the path is a duplicate. Do not serialize an empty entries.data() range;
+    // empty pack placeholders are not part of the finalized PACT.
+    if (manifest.entries.empty())
+    {
+        std::error_code error;
+        std::filesystem::remove(dataPath, error);
+        return !error;
+    }
+
+    const size_t size = GetSerializedSize();
+    std::shared_ptr<Bytebuffer> buffer = Bytebuffer::BorrowRuntime(size);
 
     manifest.header.entryCount = static_cast<u32>(manifest.entries.size());
 

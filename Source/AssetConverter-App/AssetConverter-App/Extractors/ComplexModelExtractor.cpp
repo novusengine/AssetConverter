@@ -3,12 +3,14 @@
 #include "AssetConverter-App/Casc/CascLoader.h"
 #include "AssetConverter-App/Util/JoltStream.h"
 #include "AssetConverter-App/Util/ServiceLocator.h"
+#include "AssetConverter-App/Model/ModelV2Builder.h"
 
 #include <Base/Container/ConcurrentQueue.h>
 #include <Base/Util/DebugHandler.h>
 #include <Base/Util/StringUtils.h>
 
 #include <FileFormat/Novus/Model/ComplexModel.h>
+#include <FileFormat/Novus/Model/Model.h>
 #include <FileFormat/Shared.h>
 #include <FileFormat/Warcraft/M2/M2.h>
 #include <FileFormat/Warcraft/Parsers/M2Parser.h>
@@ -20,7 +22,10 @@
 
 #include <xxhash/xxhash64.h>
 
+#include <atomic>
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 namespace fs = std::filesystem;
 
 void ComplexModelExtractor::Process()
@@ -36,6 +41,7 @@ void ComplexModelExtractor::Process()
         u32 fileID = 0;
         std::string fileName;
         std::string path;
+        std::string modelV2Path;
     };
 
     u32 numFiles = static_cast<u32>(m2FileIDs.size());
@@ -72,6 +78,9 @@ void ComplexModelExtractor::Process()
             fileListEntry.fileID = m2FileID;
             fileListEntry.fileName = outputPath.filename().string();
             fileListEntry.path = outputPath.generic_string();
+
+            outputPath.replace_extension(FileFormat::Model::FILE_EXTENSION);
+            fileListEntry.modelV2Path = outputPath.generic_string();
     
             fileListQueue.enqueue(fileListEntry);
         }
@@ -81,13 +90,20 @@ void ComplexModelExtractor::Process()
     runtime->scheduler.WaitforTask(&processM2List);
 
     std::mutex printMutex;
+    std::atomic<u64> modelV2Nanoseconds = 0;
+    std::atomic<u64> legacyNanoseconds = 0;
+    std::atomic<u32> modelV2Succeeded = 0;
+    std::atomic<u32> legacySucceeded = 0;
     u32 numProcessedFiles = 0;
     u16 progressFlags = 0;
 
     u32 numModelsToProcess = static_cast<u32>(fileListQueue.size_approx());
     NC_LOG_INFO("[ComplexModel Extractor] Processing {0} files", numModelsToProcess);
+    ModelV2Builder::ResetMeshoptimizerTimings();
+    const auto extractorWallStart = std::chrono::steady_clock::now();
 
-    enki::TaskSet convertM2Task(numModelsToProcess, [&runtime, &cascLoader, &fileListQueue, &numProcessedFiles, &progressFlags, &printMutex, numModelsToProcess](enki::TaskSetPartition range, uint32_t threadNum)
+    enki::TaskSet convertM2Task(numModelsToProcess, [&runtime, &cascLoader, &fileListQueue, &numProcessedFiles, &progressFlags, &printMutex,
+        &modelV2Nanoseconds, &legacyNanoseconds, &modelV2Succeeded, &legacySucceeded, numModelsToProcess](enki::TaskSetPartition range, uint32_t threadNum)
     {
         M2::Parser m2Parser = {};
         std::shared_ptr<Bytebuffer> buffer;
@@ -113,6 +129,32 @@ void ComplexModelExtractor::Process()
             if (!m2Parser.TryParse(M2::Parser::ParseType::Skin, skinBuffer, m2))
                 continue;
 
+            const auto modelV2Start = std::chrono::steady_clock::now();
+            std::vector<u64> modelV2TextureAssetIDs(m2.md21.textures.size, FileFormat::INVALID_ASSET_ID);
+            for (u32 textureIndex = 0; textureIndex < modelV2TextureAssetIDs.size() && textureIndex < m2.txid.textureFileIDs.size(); ++textureIndex)
+            {
+                const u32 fileID = m2.txid.textureFileIDs[textureIndex];
+                if (fileID == 0 || fileID == std::numeric_limits<u32>().max() || !cascLoader->InCascAndListFile(fileID))
+                    continue;
+                const std::string& cascFilePath = cascLoader->GetFilePathFromListFileID(fileID);
+                if (cascFilePath.empty())
+                    continue;
+                fs::path texturePath = fs::path("texture") / cascFilePath;
+                texturePath.replace_extension("dds");
+                std::string textureName = texturePath.generic_string();
+                std::transform(textureName.begin(), textureName.end(), textureName.begin(), ::tolower);
+                modelV2TextureAssetIDs[textureIndex] = XXHash64::hash(textureName.c_str(), textureName.length(), 0);
+            }
+            const bool modelV2Extracted = ModelV2Builder::ConvertM2AndAdd(runtime, rootBuffer, skinBuffer, m2,
+                modelV2TextureAssetIDs, fileListEntry.modelV2Path);
+            modelV2Nanoseconds.fetch_add(static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - modelV2Start).count()), std::memory_order_relaxed);
+            if (modelV2Extracted)
+                modelV2Succeeded.fetch_add(1, std::memory_order_relaxed);
+            else
+                NC_LOG_WARNING("[ComplexModel Extractor] Failed to extract Model V2 {0}", fileListEntry.fileName);
+
+            const auto legacyStart = std::chrono::steady_clock::now();
             Model::ComplexModel cmodel = { };
             if (!Model::ComplexModel::FromM2(rootBuffer, skinBuffer, m2, cmodel))
                 continue;
@@ -228,6 +270,7 @@ void ComplexModelExtractor::Process()
                 auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, buffer->writtenData);
                 if (manifest.AddFile(runtime, fileListEntry.path, buffer))
                 {
+                    legacySucceeded.fetch_add(1, std::memory_order_relaxed);
                     if (runtime->isInDebugMode)
                     {
                         NC_LOG_INFO("[ComplexModel Extractor] Extracted {0}", fileListEntry.fileName);
@@ -244,6 +287,8 @@ void ComplexModelExtractor::Process()
             }
 
             {
+                legacyNanoseconds.fetch_add(static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - legacyStart).count()), std::memory_order_relaxed);
                 std::scoped_lock scopedLock(printMutex);
                 
                 const u32 processedFiles = ++numProcessedFiles;
@@ -264,4 +309,41 @@ void ComplexModelExtractor::Process()
     convertM2Task.m_Priority = enki::TaskPriority::TASK_PRIORITY_HIGH;
     runtime->scheduler.AddTaskSetToPipe(&convertM2Task);
     runtime->scheduler.WaitforTask(&convertM2Task);
+    if (!ModelV2Builder::FlushPendingMaterials(runtime))
+        NC_LOG_ERROR("[ComplexModel Extractor] Failed to emit deferred Model V2 materials");
+
+    const ModelV2Builder::MeshoptimizerTimings meshoptimizerTimings = ModelV2Builder::GetMeshoptimizerTimings();
+    const auto seconds = [](u64 nanoseconds) { return static_cast<f64>(nanoseconds) / 1'000'000'000.0; };
+    const f64 extractorWallSeconds = std::chrono::duration<f64>(std::chrono::steady_clock::now() - extractorWallStart).count();
+    NC_LOG_INFO("[ComplexModel Extractor] Timings (shared CASC/parse excluded, worker time): direct Model V2 convert/cook/write {0:.3f}s for {1} files; legacy ComplexModel convert/serialize/write {2:.3f}s for {3} files",
+        static_cast<f64>(modelV2Nanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0,
+        modelV2Succeeded.load(std::memory_order_relaxed),
+        static_cast<f64>(legacyNanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0,
+        legacySucceeded.load(std::memory_order_relaxed));
+
+    // Persist benchmark data because redirected Windows consoles used by
+    // unattended extraction do not reliably preserve the logger output.
+    std::ofstream timingFile("Data/Pact/model_extraction_timings.txt", std::ios::app);
+    timingFile << "M2 DirectModelV2ConvertCookWriteWorkerSeconds=" << static_cast<f64>(modelV2Nanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0
+               << " Files=" << modelV2Succeeded.load(std::memory_order_relaxed)
+               << " LegacyComplexModelConvertSerializeWriteWorkerSeconds=" << static_cast<f64>(legacyNanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0
+               << " Files=" << legacySucceeded.load(std::memory_order_relaxed)
+               << " MeshoptimizerTotalWorkerSeconds=" << seconds(meshoptimizerTimings.GetTotalNanoseconds())
+               << " Simplification=" << seconds(meshoptimizerTimings.simplificationNanoseconds)
+               << " Tangents=" << seconds(meshoptimizerTimings.tangentGenerationNanoseconds)
+               << " VertexRemap=" << seconds(meshoptimizerTimings.vertexRemapNanoseconds)
+               << " VertexCache=" << seconds(meshoptimizerTimings.vertexCacheNanoseconds)
+               << " Overdraw=" << seconds(meshoptimizerTimings.overdrawNanoseconds)
+               << " VertexFetch=" << seconds(meshoptimizerTimings.vertexFetchNanoseconds)
+               << " MeshletBuild=" << seconds(meshoptimizerTimings.meshletBuildNanoseconds)
+               << " MeshletOptimize=" << seconds(meshoptimizerTimings.meshletOptimizationNanoseconds)
+               << " MeshletBounds=" << seconds(meshoptimizerTimings.meshletBoundsNanoseconds)
+               << " SourcePreparation=" << seconds(meshoptimizerTimings.sourcePreparationNanoseconds)
+               << " BaseLODAssembly=" << seconds(meshoptimizerTimings.baseLODAssemblyNanoseconds)
+               << " GeneratedLODAssemblyInclusive=" << seconds(meshoptimizerTimings.generatedLODAssemblyNanoseconds)
+               << " MaterialProcessing=" << seconds(meshoptimizerTimings.materialProcessingNanoseconds)
+               << " GeometryCookingInclusive=" << seconds(meshoptimizerTimings.geometryCookingNanoseconds)
+               << " Serialization=" << seconds(meshoptimizerTimings.serializationNanoseconds)
+               << " PactWrite=" << seconds(meshoptimizerTimings.pactWriteNanoseconds)
+               << " ExtractorWallSeconds=" << extractorWallSeconds << '\n';
 }

@@ -5,6 +5,7 @@
 #include "Extractors/MapObjectExtractor.h"
 #include "Extractors/ComplexModelExtractor.h"
 #include "Extractors/TextureExtractor.h"
+#include "Model/ModelV2Allocation.h"
 #include "Util/ServiceLocator.h"
 
 #include <Base/Types.h>
@@ -256,16 +257,10 @@ i32 main()
                         }
                     }
 
-                    // Map / NavMesh
-                    if ((isMapEnabled || isNavMeshEnabled) && mapDataAvailable)
-                    {
-                        NC_LOG_INFO("[AssetConverter] Processing Map/NavMesh Extractor...");
-                        MapExtractor::Process(isMapEnabled, isNavMeshEnabled);
-                        NC_LOG_INFO("[AssetConverter] Map/NavMesh Extractor Finished\n");
-                    }
-
                     // Map Object / Complex Model
                     {
+                        ModelV2AllocationRegistry::Reset();
+
                         if (isMapObjectEnabled)
                         {
                             NC_LOG_INFO("[AssetConverter] Processing MapObject Extractor...");
@@ -279,6 +274,15 @@ i32 main()
                             ComplexModelExtractor::Process();
                             NC_LOG_INFO("[AssetConverter] ComplexModel Extractor Finished\n");
                         }
+                    }
+
+                    // Map metadata consumes the Model V2 allocation registry,
+                    // so maps follow model conversion and never scan payloads.
+                    if ((isMapEnabled || isNavMeshEnabled) && mapDataAvailable)
+                    {
+                        NC_LOG_INFO("[AssetConverter] Processing Map/NavMesh Extractor...");
+                        MapExtractor::Process(isMapEnabled, isNavMeshEnabled);
+                        NC_LOG_INFO("[AssetConverter] Map/NavMesh Extractor Finished\n");
                     }
 
                     // Texture
