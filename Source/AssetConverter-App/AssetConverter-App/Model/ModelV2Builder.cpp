@@ -318,6 +318,14 @@ namespace
 
     struct MaterialDescription
     {
+        struct ProgramDefinition
+        {
+            std::array<u8, 64> bytes = {};
+            u32 size = 0;
+
+            bool operator==(const ProgramDefinition&) const = default;
+        };
+
         FileFormat::Material::RasterClass rasterClass = FileFormat::Material::RasterClass::Solid;
         u32 flags = FileFormat::Material::MaterialFlags_CastsShadows |
             FileFormat::Material::MaterialFlags_ReceivesDecals |
@@ -325,8 +333,9 @@ namespace
         u16 lightingModelID = WowMaterialABI::Standard;
         u16 executionGroupID = WowMaterialABI::OpaqueSimple;
         u32 programID = 0;
-        u64 programSignature = 0;
+        FileFormat::Material::MaterialProgramKey programKey = FileFormat::Material::INVALID_MATERIAL_PROGRAM_KEY;
         u64 instanceSignature = 0;
+        ProgramDefinition programDefinition;
         std::array<u64, WowMaterialABI::MaxTextures> textureAssetIDs = {};
         std::array<u16, WowMaterialABI::MaxTextures> samplerIDs = {};
         std::array<u32, WowMaterialABI::MaxTextures> legacyUnits = {};
@@ -337,7 +346,7 @@ namespace
     std::mutex gGeneratedMaterialMutex;
     std::unordered_set<u64> gGeneratedMaterialPaths;
     std::unordered_map<u64, MaterialDescription> gPendingMaterials;
-    std::unordered_map<u32, u64> gMaterialProgramSignatures;
+    std::unordered_map<FileFormat::Material::MaterialProgramKey, MaterialDescription::ProgramDefinition> gMaterialProgramDefinitions;
 
     u64 HashBytes(const void* data, size_t size)
     {
@@ -372,6 +381,25 @@ namespace
             return false;
 
         gGeneratedMaterialPaths.insert(pathHash);
+        return true;
+    }
+
+    bool RegisterMaterialProgramLocked(const MaterialDescription& description)
+    {
+        if (description.programKey == FileFormat::Material::INVALID_MATERIAL_PROGRAM_KEY ||
+            description.programDefinition.size > description.programDefinition.bytes.size())
+        {
+            NC_LOG_ERROR("[Model V2] Invalid canonical material program definition for key {0}", Hex(description.programKey));
+            return false;
+        }
+
+        const auto [programIt, insertedProgram] = gMaterialProgramDefinitions.try_emplace(
+            description.programKey, description.programDefinition);
+        if (!insertedProgram && programIt->second != description.programDefinition)
+        {
+            NC_LOG_ERROR("[Model V2] Canonical material program key collision for {0}", Hex(description.programKey));
+            return false;
+        }
         return true;
     }
 
@@ -763,8 +791,11 @@ namespace
         appendProgram(result.flags);
         appendProgram(result.lightingModelID);
         appendProgram(result.executionGroupID);
-        result.programSignature = HashBytes(programBytes.data(), programBytes.size());
-        result.programID = FoldHash32(result.programSignature);
+        result.programDefinition.size = static_cast<u32>(programBytes.size());
+        if (programBytes.size() <= result.programDefinition.bytes.size())
+            std::memcpy(result.programDefinition.bytes.data(), programBytes.data(), programBytes.size());
+        result.programKey = HashBytes(programBytes.data(), programBytes.size());
+        result.programID = FoldHash32(result.programKey);
 
         std::vector<u8> instanceBytes = programBytes;
         const u8* textureBytes = reinterpret_cast<const u8*>(result.textureAssetIDs.data());
@@ -828,7 +859,7 @@ namespace
     bool EmitMaterialAssets(Runtime* runtime, const MaterialDescription& description,
         const FileFormat::Material::MaterialData& materialData, u64& instanceAssetID)
     {
-        const std::string materialPath = "material/generated/wow/program_" + Hex(description.programSignature) + FileFormat::Material::MATERIAL_FILE_EXTENSION;
+        const std::string materialPath = "material/generated/wow/program_" + Hex(description.programKey) + FileFormat::Material::MATERIAL_FILE_EXTENSION;
         const std::string instancePath = "material/generated/wow/instance_" + Hex(description.instanceSignature) + FileFormat::Material::MATERIAL_INSTANCE_FILE_EXTENSION;
         instanceAssetID = HashString(instancePath);
 
@@ -845,6 +876,7 @@ namespace
         if (!hasMaterial)
         {
             FileFormat::Material::MaterialAsset material;
+            material.programKey = description.programKey;
             material.programID = description.programID;
             material.lightingModelID = description.lightingModelID;
             material.materialExecutionGroupID = description.executionGroupID;
@@ -889,13 +921,17 @@ namespace
         instanceAssetID = HashString(instancePath);
         if (!CookSettings::DeferMaterialEmission)
         {
+            {
+                std::scoped_lock lock(gGeneratedMaterialMutex);
+                if (!RegisterMaterialProgramLocked(description))
+                    return false;
+            }
             const FileFormat::Material::MaterialData materialData = BuildMaterialData();
             return EmitMaterialAssets(runtime, description, materialData, instanceAssetID);
         }
 
         std::scoped_lock lock(gGeneratedMaterialMutex);
-        const auto [programIt, insertedProgram] = gMaterialProgramSignatures.try_emplace(description.programID, description.programSignature);
-        if (!insertedProgram && programIt->second != description.programSignature)
+        if (!RegisterMaterialProgramLocked(description))
             return false;
         if (!gGeneratedMaterialPaths.contains(instanceAssetID))
             gPendingMaterials.try_emplace(instanceAssetID, description);
