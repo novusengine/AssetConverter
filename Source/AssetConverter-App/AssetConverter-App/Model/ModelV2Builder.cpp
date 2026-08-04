@@ -25,6 +25,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <mutex>
@@ -60,6 +62,8 @@ namespace
 
     namespace WowMaterialABI
     {
+        inline constexpr u32 Version = 1;
+        inline constexpr u32 ManifestSchemaVersion = 1;
         inline constexpr u32 MaxTextures = 8;
         inline constexpr u32 BaseColorOffset = 0;
         inline constexpr u32 TextureOffset = 16;
@@ -211,9 +215,18 @@ namespace
         BlendAdd
     };
 
+    enum class SourceMaterialKind : u8
+    {
+        M2,
+        WMO
+    };
+
     struct SourceMaterial
     {
         SourceBlendMode blendMode = SourceBlendMode::Opaque;
+        u32 sourceBlendMode = 0;
+        SourceMaterialKind kind = SourceMaterialKind::M2;
+        u32 sourceFlags = 0;
         bool isUnlit = false;
         bool isUnfogged = false;
         bool isTwoSided = false;
@@ -230,6 +243,7 @@ namespace
         i16 shaderID = 0;
         u16 materialIndex = 0;
         u16 materialLayer = 0;
+        u16 authoredTextureCount = 0;
         u8 flags = 0;
         std::vector<u32> textureIndices;
     };
@@ -318,9 +332,24 @@ namespace
 
     struct MaterialDescription
     {
+        struct ProgramUnit
+        {
+            u16 authoredShaderID = 0;
+            u16 layer = 0;
+            u32 sourceMaterialFlags = 0;
+            u32 sourceBlendMode = 0;
+            u16 textureCount = 0;
+            u8 flags = 0;
+            SourceBlendMode blendMode = SourceBlendMode::Opaque;
+            SourceMaterialKind sourceMaterialKind = SourceMaterialKind::M2;
+            bool isUnlit = false;
+            bool isUnfogged = false;
+            bool isTwoSided = false;
+        };
+
         struct ProgramDefinition
         {
-            std::array<u8, 64> bytes = {};
+            std::array<u8, 256> bytes = {};
             u32 size = 0;
 
             bool operator==(const ProgramDefinition&) const = default;
@@ -336,6 +365,7 @@ namespace
         FileFormat::Material::MaterialProgramKey programKey = FileFormat::Material::INVALID_MATERIAL_PROGRAM_KEY;
         u64 instanceSignature = 0;
         ProgramDefinition programDefinition;
+        std::vector<ProgramUnit> programUnits;
         std::array<u64, WowMaterialABI::MaxTextures> textureAssetIDs = {};
         std::array<u16, WowMaterialABI::MaxTextures> samplerIDs = {};
         std::array<u32, WowMaterialABI::MaxTextures> legacyUnits = {};
@@ -346,7 +376,7 @@ namespace
     std::mutex gGeneratedMaterialMutex;
     std::unordered_set<u64> gGeneratedMaterialPaths;
     std::unordered_map<u64, MaterialDescription> gPendingMaterials;
-    std::unordered_map<FileFormat::Material::MaterialProgramKey, MaterialDescription::ProgramDefinition> gMaterialProgramDefinitions;
+    std::unordered_map<FileFormat::Material::MaterialProgramKey, MaterialDescription> gMaterialProgramDefinitions;
 
     u64 HashBytes(const void* data, size_t size)
     {
@@ -394,13 +424,32 @@ namespace
         }
 
         const auto [programIt, insertedProgram] = gMaterialProgramDefinitions.try_emplace(
-            description.programKey, description.programDefinition);
-        if (!insertedProgram && programIt->second != description.programDefinition)
+            description.programKey, description);
+        if (!insertedProgram && programIt->second.programDefinition != description.programDefinition)
         {
             NC_LOG_ERROR("[Model V2] Canonical material program key collision for {0}", Hex(description.programKey));
             return false;
         }
         return true;
+    }
+
+    const char* SourceMaterialKindName(SourceMaterialKind kind)
+    {
+        switch (kind)
+        {
+            case SourceMaterialKind::M2: return "M2";
+            case SourceMaterialKind::WMO: return "WMO";
+        }
+        return "Unknown";
+    }
+
+    std::string BytesToHex(const u8* bytes, u32 size)
+    {
+        std::ostringstream stream;
+        stream << std::hex << std::setfill('0');
+        for (u32 i = 0; i < size; ++i)
+            stream << std::setw(2) << static_cast<u32>(bytes[i]);
+        return stream.str();
     }
 
     u32 PackSnorm(f32 value, u32 bits)
@@ -723,6 +772,15 @@ namespace
             programBytes.insert(programBytes.end(), bytes, bytes + sizeof(value));
         };
 
+        // The canonical key describes source program semantics, not converter
+        // routing. Keep these versioned fields in the byte definition so an ABI
+        // or manifest-contract change cannot silently reuse an older key.
+        appendProgram(WowMaterialABI::ManifestSchemaVersion);
+        appendProgram(WowMaterialABI::Version);
+        appendProgram(WowMaterialABI::ParameterBlockSize);
+        const u32 sourceUnitCount = static_cast<u32>(batch.textureUnits.size());
+        appendProgram(sourceUnitCount);
+
         bool isUnlit = false;
         bool isTwoSided = false;
         bool receivesFog = true;
@@ -731,6 +789,11 @@ namespace
         for (u32 unitIndex = 0; unitIndex < batch.textureUnits.size(); ++unitIndex)
         {
             const SourceTextureUnit& unit = batch.textureUnits[unitIndex];
+            MaterialDescription::ProgramUnit& programUnit = result.programUnits.emplace_back();
+            programUnit.authoredShaderID = static_cast<u16>(unit.shaderID);
+            programUnit.layer = unit.materialLayer;
+            programUnit.textureCount = unit.authoredTextureCount;
+            programUnit.flags = unit.flags;
             if (unit.materialIndex < source.materials.size())
             {
                 const SourceMaterial& material = source.materials[unit.materialIndex];
@@ -738,6 +801,13 @@ namespace
                 isUnlit |= material.isUnlit;
                 isTwoSided |= material.isTwoSided;
                 receivesFog &= !material.isUnfogged;
+                programUnit.sourceMaterialFlags = material.sourceFlags;
+                programUnit.sourceBlendMode = material.sourceBlendMode;
+                programUnit.blendMode = material.blendMode;
+                programUnit.sourceMaterialKind = material.kind;
+                programUnit.isUnlit = material.isUnlit;
+                programUnit.isUnfogged = material.isUnfogged;
+                programUnit.isTwoSided = material.isTwoSided;
             }
 
             // Preserve the authored WoW shader ID. Material programs are still
@@ -749,7 +819,18 @@ namespace
                 (static_cast<u32>(unit.flags & 0xFu) << 28u);
             if (unitIndex < result.legacyUnits.size())
                 result.legacyUnits[unitIndex] = packedUnit;
-            appendProgram(packedUnit);
+
+            appendProgram(programUnit.authoredShaderID);
+            appendProgram(programUnit.layer);
+            appendProgram(programUnit.sourceMaterialFlags);
+            appendProgram(programUnit.sourceBlendMode);
+            appendProgram(programUnit.textureCount);
+            appendProgram(programUnit.flags);
+            appendProgram(programUnit.blendMode);
+            appendProgram(programUnit.sourceMaterialKind);
+            appendProgram(static_cast<u8>(programUnit.isUnlit));
+            appendProgram(static_cast<u8>(programUnit.isUnfogged));
+            appendProgram(static_cast<u8>(programUnit.isTwoSided));
 
             for (u32 textureIndex : unit.textureIndices)
             {
@@ -790,7 +871,8 @@ namespace
         appendProgram(result.rasterClass);
         appendProgram(result.flags);
         appendProgram(result.lightingModelID);
-        appendProgram(result.executionGroupID);
+        // executionGroupID is converter routing selected from these semantics;
+        // it is deliberately absent from the authored canonical definition.
         result.programDefinition.size = static_cast<u32>(programBytes.size());
         if (programBytes.size() <= result.programDefinition.bytes.size())
             std::memcpy(result.programDefinition.bytes.data(), programBytes.data(), programBytes.size());
@@ -831,6 +913,154 @@ namespace
         const f32 alphaCutoff = 0.5f;
         std::memcpy(data.defaultParameterData.data() + WowMaterialABI::AlphaCutoffOffset, &alphaCutoff, sizeof(alphaCutoff));
         return data;
+    }
+
+    const char* ParameterTypeName(FileFormat::Material::ParameterType type)
+    {
+        using Type = FileFormat::Material::ParameterType;
+        switch (type)
+        {
+            case Type::Float: return "Float";
+            case Type::Float2: return "Float2";
+            case Type::Float3: return "Float3";
+            case Type::Float4: return "Float4";
+            case Type::UInt: return "UInt";
+            case Type::UInt2: return "UInt2";
+            case Type::UInt3: return "UInt3";
+            case Type::UInt4: return "UInt4";
+            case Type::Texture2D: return "Texture2D";
+            case Type::TextureCube: return "TextureCube";
+            case Type::Sampler: return "Sampler";
+        }
+        return "Unknown";
+    }
+
+    const char* RasterClassName(FileFormat::Material::RasterClass rasterClass)
+    {
+        using Class = FileFormat::Material::RasterClass;
+        switch (rasterClass)
+        {
+            case Class::Solid: return "Solid";
+            case Class::AlphaTest: return "AlphaTest";
+            case Class::Transparent: return "Transparent";
+        }
+        return "Unknown";
+    }
+
+    const char* BlendModeName(SourceBlendMode blendMode)
+    {
+        switch (blendMode)
+        {
+            case SourceBlendMode::Opaque: return "Opaque";
+            case SourceBlendMode::AlphaKey: return "AlphaKey";
+            case SourceBlendMode::Alpha: return "Alpha";
+            case SourceBlendMode::NoAlphaAdd: return "NoAlphaAdd";
+            case SourceBlendMode::Add: return "Add";
+            case SourceBlendMode::Mod: return "Mod";
+            case SourceBlendMode::Mod2X: return "Mod2X";
+            case SourceBlendMode::BlendAdd: return "BlendAdd";
+        }
+        return "Unknown";
+    }
+
+    bool ExportMaterialProgramManifest(Runtime* runtime, const FileFormat::Material::MaterialData& materialData)
+    {
+        std::vector<MaterialDescription> programs;
+        {
+            std::scoped_lock lock(gGeneratedMaterialMutex);
+            programs.reserve(gMaterialProgramDefinitions.size());
+            for (const auto& [programKey, description] : gMaterialProgramDefinitions)
+                programs.push_back(description);
+        }
+        std::sort(programs.begin(), programs.end(), [](const MaterialDescription& left, const MaterialDescription& right)
+        {
+            return left.programKey < right.programKey;
+        });
+
+        nlohmann::ordered_json manifest;
+        manifest["schemaVersion"] = WowMaterialABI::ManifestSchemaVersion;
+        manifest["materialABIVersion"] = WowMaterialABI::Version;
+        manifest["programCount"] = programs.size();
+        manifest["parameterBlockSize"] = WowMaterialABI::ParameterBlockSize;
+        manifest["parameterBlockAlignment"] = 16;
+        manifest["parameterLayoutHash"] = FileFormat::Material::CalculateParameterLayoutHash(
+            materialData.parameters, WowMaterialABI::ParameterBlockSize);
+        manifest["parameters"] = nlohmann::ordered_json::array();
+        for (const FileFormat::Material::ParameterDefinition& parameter : materialData.parameters)
+        {
+            nlohmann::ordered_json definition;
+            definition["nameHash"] = parameter.nameHash;
+            definition["byteOffset"] = parameter.byteOffset;
+            definition["byteSize"] = parameter.byteSize;
+            definition["type"] = static_cast<u8>(parameter.type);
+            definition["typeName"] = ParameterTypeName(parameter.type);
+            definition["arrayCount"] = parameter.arrayCount;
+            manifest["parameters"].push_back(std::move(definition));
+        }
+
+        manifest["programs"] = nlohmann::ordered_json::array();
+        for (const MaterialDescription& program : programs)
+        {
+            nlohmann::ordered_json definition;
+            definition["canonicalKey"] = "wow/" + Hex(program.programKey);
+            definition["programKey"] = program.programKey;
+            definition["programID"] = program.programID;
+            definition["canonicalDefinition"] = BytesToHex(
+                program.programDefinition.bytes.data(), program.programDefinition.size);
+            definition["lightingModelID"] = program.lightingModelID;
+            definition["rasterClass"] = static_cast<u8>(program.rasterClass);
+            definition["rasterClassName"] = RasterClassName(program.rasterClass);
+            definition["materialFlags"] = program.flags;
+            definition["units"] = nlohmann::ordered_json::array();
+            for (u32 unitIndex = 0; unitIndex < program.programUnits.size(); ++unitIndex)
+            {
+                const MaterialDescription::ProgramUnit& unit = program.programUnits[unitIndex];
+                nlohmann::ordered_json unitDefinition;
+                unitDefinition["unitIndex"] = unitIndex;
+                unitDefinition["authoredShaderID"] = unit.authoredShaderID;
+                unitDefinition["textureCount"] = unit.textureCount;
+                unitDefinition["layer"] = unit.layer;
+                unitDefinition["flags"] = unit.flags;
+                unitDefinition["blendMode"] = static_cast<u16>(unit.blendMode);
+                unitDefinition["blendModeName"] = BlendModeName(unit.blendMode);
+                unitDefinition["sourceMaterialKind"] = static_cast<u8>(unit.sourceMaterialKind);
+                unitDefinition["sourceMaterialKindName"] = SourceMaterialKindName(unit.sourceMaterialKind);
+                unitDefinition["sourceMaterialFlags"] = unit.sourceMaterialFlags;
+                unitDefinition["sourceBlendMode"] = unit.sourceBlendMode;
+                unitDefinition["isUnlit"] = unit.isUnlit;
+                unitDefinition["isUnfogged"] = unit.isUnfogged;
+                unitDefinition["isTwoSided"] = unit.isTwoSided;
+                definition["units"].push_back(std::move(unitDefinition));
+            }
+            manifest["programs"].push_back(std::move(definition));
+        }
+
+        const std::filesystem::path outputPath = runtime->paths.pactRoot / "material_program_manifest.json";
+        const std::filesystem::path temporaryPath = outputPath.string() + ".tmp";
+        std::ofstream output(temporaryPath, std::ios::out | std::ios::binary | std::ios::trunc);
+        if (!output.is_open())
+        {
+            NC_LOG_ERROR("[Model V2] Failed to open material program manifest {0}", temporaryPath.string());
+            return false;
+        }
+        output << manifest.dump(2) << '\n';
+        output.close();
+        if (!output)
+        {
+            NC_LOG_ERROR("[Model V2] Failed to write material program manifest {0}", temporaryPath.string());
+            return false;
+        }
+
+        std::error_code error;
+        std::filesystem::remove(outputPath, error);
+        error.clear();
+        std::filesystem::rename(temporaryPath, outputPath, error);
+        if (error)
+        {
+            NC_LOG_ERROR("[Model V2] Failed to publish material program manifest {0}: {1}", outputPath.string(), error.message());
+            return false;
+        }
+        return true;
     }
 
     bool ValidateMaterialData(const FileFormat::Material::MaterialData& data)
@@ -1542,11 +1772,9 @@ ModelV2Builder::MeshoptimizerTimings ModelV2Builder::GetMeshoptimizerTimings()
 
 bool ModelV2Builder::FlushPendingMaterials(Runtime* runtime)
 {
-    if (!CookSettings::DeferMaterialEmission)
-        return true;
-
     const auto materialStart = MeshoptimizerTiming::Start();
     std::unordered_map<u64, MaterialDescription> pendingMaterials;
+    if constexpr (CookSettings::DeferMaterialEmission)
     {
         std::scoped_lock lock(gGeneratedMaterialMutex);
         pendingMaterials.swap(gPendingMaterials);
@@ -1561,6 +1789,8 @@ bool ModelV2Builder::FlushPendingMaterials(Runtime* runtime)
         if (!EmitMaterialAssets(runtime, description, materialData, emittedAssetID) || emittedAssetID != assetID)
             return false;
     }
+    if (!ExportMaterialProgramManifest(runtime, materialData))
+        return false;
     MeshoptimizerTiming::Add(MeshoptimizerTiming::MaterialProcessing, materialStart);
     return true;
 }
@@ -1592,6 +1822,10 @@ bool ModelV2Builder::ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffe
         const M2::M2Material& input = *layout.md21.materials.GetElement(rootBuffer, materialIndex);
         SourceMaterial& material = source.materials[materialIndex];
         material.blendMode = static_cast<SourceBlendMode>(input.blendingMode);
+        material.sourceBlendMode = static_cast<u32>(input.blendingMode);
+        material.kind = SourceMaterialKind::M2;
+        static_assert(sizeof(input.flags) <= sizeof(material.sourceFlags));
+        std::memcpy(&material.sourceFlags, &input.flags, sizeof(input.flags));
         material.isUnlit = input.flags.unLit;
         material.isUnfogged = input.flags.unFogged;
         material.isTwoSided = input.flags.disableBackfaceCulling;
@@ -1635,6 +1869,7 @@ bool ModelV2Builder::ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffe
             unit.shaderID = input.shaderID;
             unit.materialIndex = input.materialIndex;
             unit.materialLayer = input.materialLayer;
+            unit.authoredTextureCount = input.textureCount;
             unit.flags = input.flags;
             unit.textureIndices.reserve(input.textureCount);
             for (u32 texture = 0; texture < input.textureCount; ++texture)
@@ -1667,6 +1902,10 @@ bool ModelV2Builder::ConvertWMOAndAdd(Runtime* runtime, Wmo::Layout& layout,
         const Wmo::MOMT::Material& input = layout.momt.data[materialIndex];
         SourceMaterial& material = source.materials[materialIndex];
         material.blendMode = ConvertWMOBlendMode(input.blendMode);
+        material.sourceBlendMode = input.blendMode;
+        material.kind = SourceMaterialKind::WMO;
+        static_assert(sizeof(input.flags) <= sizeof(material.sourceFlags));
+        std::memcpy(&material.sourceFlags, &input.flags, sizeof(input.flags));
         material.isUnlit = input.flags.NoLighting;
         material.isUnfogged = input.flags.NoFog;
         material.isTwoSided = input.flags.TwoSided;
@@ -1733,6 +1972,7 @@ bool ModelV2Builder::ConvertWMOAndAdd(Runtime* runtime, Wmo::Layout& layout,
                 if (textureIndex != std::numeric_limits<u32>::max())
                     unit.textureIndices.push_back(textureIndex);
             }
+            unit.authoredTextureCount = static_cast<u16>(unit.textureIndices.size());
         }
         vertexOffset += numVertices;
         indexOffset += static_cast<u32>(group.movi.data.size());
