@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $false)]
-    [string] $PactRoot = "C:\Program Files (x86)\World of Warcraft\_classic_era_\Data\Pact"
+    [string] $PactRoot = "Data\Pact"
 )
 
 $ErrorActionPreference = "Stop"
