@@ -11,64 +11,28 @@
 #include <Base/Util/JsonUtils.h>
 #include <Base/Util/DebugHandler.h>
 
+#include <Filesystem/PactStorage.h>
+
 #include <Jolt/Jolt.h>
 #include <Jolt/Core/Factory.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <quill/Backend.h>
 
+#include <algorithm>
 #include <filesystem>
-#include <fstream>
 namespace fs = std::filesystem;
 
 namespace
 {
-    bool RemoveGeneratedPactFiles(const fs::path& directory, const std::string& extension)
-    {
-        std::error_code error;
-        if (!fs::exists(directory, error))
-        {
-            if (error)
-            {
-                NC_LOG_ERROR("[AssetConverter] Failed to inspect PACT directory {0}: {1}", directory.string(), error.message());
-                return false;
-            }
-
-            return true;
-        }
-
-        for (fs::directory_iterator itr(directory, error); !error && itr != fs::directory_iterator(); itr.increment(error))
-        {
-            const fs::directory_entry& entry = *itr;
-            if (entry.is_regular_file(error) && entry.path().extension() == extension)
-                fs::remove(entry.path(), error);
-
-            if (error)
-                break;
-        }
-
-        if (error)
-        {
-            NC_LOG_ERROR("[AssetConverter] Failed to clean generated PACT files in {0}: {1}", directory.string(), error.message());
-            return false;
-        }
-
-        return true;
-    }
-
     bool InitializePact(Runtime* runtime)
     {
-        if (!RemoveGeneratedPactFiles(runtime->paths.pactManifest, PACT::Config::MANIFEST_EXT) ||
-            !RemoveGeneratedPactFiles(runtime->paths.pactData, PACT::Config::DATA_EXT))
-        {
-            NC_LOG_CRITICAL("[AssetConverter] Failed to clean generated PACT files; aborting extraction");
-            return false;
-        }
-
         std::error_code error;
         fs::create_directories(runtime->paths.pactRoot, error);
+
         if (!error)
             fs::create_directories(runtime->paths.pactManifest, error);
+
         if (!error)
             fs::create_directories(runtime->paths.pactData, error);
 
@@ -79,31 +43,62 @@ namespace
         }
 
         PACT::PactRoot& pactRoot = runtime->pactInfo.GetRoot();
-        pactRoot.version = PACT::Config::ROOT_VERSION;
-        pactRoot.featureSet = {};
-
-        std::shared_ptr<Bytebuffer> buffer = Bytebuffer::Borrow<sizeof(PACT::PactRoot)>();
-        if (!buffer->Serialize(pactRoot))
+        const fs::path pactRootPath = runtime->paths.pactRoot / PACT::Config::ROOT_FILE;
+        const bool pactStorageExists = fs::exists(pactRootPath, error);
+        if (error)
         {
-            NC_LOG_CRITICAL("[AssetConverter] Failed to serialize the PACT root");
+            NC_LOG_CRITICAL("[AssetConverter] Failed to inspect the existing PACT root: {0}", error.message());
             return false;
         }
 
-        const fs::path pactRootPath = fs::absolute(runtime->paths.pactRoot / PACT::Config::ROOT_FILE);
-        std::ofstream rootWriter(pactRootPath, std::ios::out | std::ios::binary | std::ios::trunc);
-        if (!rootWriter.is_open())
+        if (pactStorageExists)
         {
-            NC_LOG_CRITICAL("[AssetConverter] Failed to open the PACT root file {0}", pactRootPath.string());
-            return false;
-        }
+            PACT::PactStorage existingStorage;
+            if (!existingStorage.Open(runtime->paths.pactRoot))
+            {
+                NC_LOG_CRITICAL("[AssetConverter] Existing PACT storage is invalid and will not be overwritten");
+                return false;
+            }
 
-        rootWriter.write(reinterpret_cast<const char*>(buffer->GetDataPointer()), static_cast<std::streamsize>(buffer->writtenData));
-        rootWriter.flush();
-        rootWriter.close();
-        if (rootWriter.fail())
+            pactRoot = existingStorage.GetRoot();
+            if (!existingStorage.Shutdown())
+            {
+                NC_LOG_CRITICAL("[AssetConverter] Failed to close the existing PACT storage");
+                return false;
+            }
+
+            for (const PACT::PactManifestRef& manifestRef : pactRoot.manifestRefs)
+            {
+                if (manifestRef.origin == PACT::PactManifestOrigin::Local)
+                    runtime->pactInfo.supersededLocalDigests.push_back(manifestRef.digest);
+            }
+
+            std::erase_if(pactRoot.manifestRefs, [](const PACT::PactManifestRef& manifestRef)
+            {
+                return manifestRef.origin == PACT::PactManifestOrigin::Local;
+            });
+
+            if (!pactRoot.featureSet.chunking)
+            {
+                NC_LOG_CRITICAL("[AssetConverter] Existing PACT storage does not enable content-defined chunking");
+                return false;
+            }
+        }
+        else
         {
-            NC_LOG_CRITICAL("[AssetConverter] Failed to write the PACT root file {0}", pactRootPath.string());
-            return false;
+            pactRoot =
+            {
+                .version = PACT::Config::ROOT_VERSION,
+                .featureSet =
+                {
+                    .chunking = 1,
+                    .hashAlgo = 0,
+                    .cdcAlgo = 0,
+                    .cdcMinSize = PACT::Config::CDC_MIN_SIZE,
+                    .cdcAvgSize = PACT::Config::CDC_AVG_SIZE,
+                    .cdcMaxSize = PACT::Config::CDC_MAX_SIZE
+                }
+            };
         }
 
         runtime->pactInfo.Initialize();
@@ -181,8 +176,7 @@ i32 main()
             isMapObjectEnabled = runtime->json["Extraction"]["MapObject"]["Enabled"];
             isComplexModelEnabled = runtime->json["Extraction"]["ComplexModel"]["Enabled"];
             isTextureEnabled = runtime->json["Extraction"]["Texture"]["Enabled"];
-            rebuildPact = isExtractingEnabled &&
-                (isDB2Enabled || isMapEnabled || isMapObjectEnabled || isComplexModelEnabled || isTextureEnabled);
+            rebuildPact = isExtractingEnabled && (isDB2Enabled || isMapEnabled || isMapObjectEnabled || isComplexModelEnabled || isTextureEnabled);
         }
 
         if (!rebuildPact && isExtractingEnabled && isNavMeshEnabled)

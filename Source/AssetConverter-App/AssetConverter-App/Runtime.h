@@ -2,6 +2,7 @@
 #include <Base/Memory/Bytebuffer.h>
 
 #include <Filesystem/Config.h>
+#include <Filesystem/Core/Chunk.h>
 #include <Filesystem/Core/File.h>
 #include <Filesystem/Core/Manifest.h>
 #include <Filesystem/Core/Root.h>
@@ -20,9 +21,9 @@ struct Runtime;
 struct PactManifestInfo
 {
 public:
-    PactManifestInfo() { }
+    PactManifestInfo() {}
 
-    bool Initialize(const std::filesystem::path& manifestPath, const std::filesystem::path& manifestDataPath, size_t entryCount);
+    bool Initialize(const u64 manifestID, const std::filesystem::path& manifestPath, const std::filesystem::path& manifestDataPath, size_t entryCount);
     bool AddFile(Runtime* runtime, const std::string& path, std::shared_ptr<Bytebuffer>& data, PACT::PactFileID* fileID = nullptr);
     bool AddFile(Runtime* runtime, const std::string& path, std::vector<u8>& data, PACT::PactFileID* fileID = nullptr);
 
@@ -35,6 +36,7 @@ public:
 public:
     std::filesystem::path path;
     std::filesystem::path dataPath;
+    PACT::PactDigest digest = {};
 
     std::mutex addFileMutex;
     size_t reservedBytes = 0;
@@ -49,11 +51,10 @@ public:
     void Initialize();
     bool Finalize();
 
+    std::vector<std::unique_ptr<PactManifestInfo>>& GetAllManifests() { return _manifests; }
     PactManifestInfo& GetManifestForFile(Runtime* runtime, size_t fileSize);
 
 private:
-    static constexpr u64 MAX_MANIFEST_SIZE = 1 * 1024 * 1024 * 1024; // 1 GB
-
     std::mutex _rolloverMutex;
 
     size_t _currentManifestIndex = 0;
@@ -120,10 +121,7 @@ public:
         _manifestPool.Initialize();
     }
 
-    bool Finalize()
-    {
-        return _manifestPool.Finalize() && !_failed.load(std::memory_order_acquire);
-    }
+    bool Finalize();
 
     void MarkFailed()
     {
@@ -134,9 +132,10 @@ public:
     std::shared_mutex _fileIDMutex;
 
     PACT::PactRoot _root;
-    PACT::PactFileID _nextFileID = 1;
+    PACT::PactFileID _nextFileID = PACT::Config::LOCAL_FILE_ID_START;
     robin_hood::unordered_map<u64, PACT::PactFileID> _fileHashToID;
     ManifestPool _manifestPool;
+    std::vector<PACT::PactDigest> supersededLocalDigests;
     std::atomic<bool> _failed = false;
 };
 
