@@ -6,6 +6,7 @@
 #include "Extractors/ComplexModelExtractor.h"
 #include "Extractors/TextureExtractor.h"
 #include "Model/ModelV2Allocation.h"
+#include "Model/ModelV2Builder.h"
 #include "Util/ServiceLocator.h"
 
 #include <Base/Types.h>
@@ -273,6 +274,19 @@ i32 main()
                             NC_LOG_INFO("[AssetConverter] Processing ComplexModel Extractor...");
                             ComplexModelExtractor::Process();
                             NC_LOG_INFO("[AssetConverter] ComplexModel Extractor Finished\n");
+                        }
+
+                        if (isDB2Enabled && isComplexModelEnabled)
+                        {
+                            NC_LOG_INFO("[AssetConverter] Processing display material assignments...");
+                            if (!ModelV2Builder::BuildDisplayData(runtime))
+                            {
+                                NC_LOG_ERROR("[AssetConverter] Failed to build display material assignments");
+                            }
+                            else
+                            {
+                                NC_LOG_INFO("[AssetConverter] display material assignments finished\n");
+                            }
                         }
                     }
 

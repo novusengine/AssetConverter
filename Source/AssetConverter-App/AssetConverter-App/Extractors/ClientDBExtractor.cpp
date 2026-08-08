@@ -190,6 +190,8 @@ bool ClientDBExtractor::ExtractModelFileData(const std::string& name)
 
     modelFileDataStorage.Initialize<MetaGen::Shared::ClientDB::ModelFileDataRecord>();
     modelFileDataStorage.Reserve(header.recordCount);
+    robin_hood::unordered_map<u32, u32> modelFileIDByRecordID;
+    modelFileIDByRecordID.reserve(header.recordCount);
 
     for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
     {
@@ -201,9 +203,17 @@ bool ClientDBExtractor::ExtractModelFileData(const std::string& name)
             continue;
 
         MetaGen::Shared::ClientDB::ModelFileDataRecord modelFileData;
-        u32 modelFileID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 0);
-        modelFileData.flags = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 1);
-        modelFileData.modelResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 3);
+        // Source field 0 stores model scale; field 1 stores the FileDataID.
+        u32 modelFileID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 1);
+        modelFileData.flags = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 2);
+        // Resolve ModelResourcesID from the relationship map when present.
+        modelFileData.modelResourcesID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2);
+        u32 localRecordIndex = db2RecordIndex;
+        for (u32 previousSection = 0; previousSection < sectionID; ++previousSection)
+            localRecordIndex -= layout.sectionHeaders[previousSection].recordCount;
+        const auto relationshipItr = layout.sections[sectionID].recordIndexToForeignID.find(localRecordIndex);
+        if (relationshipItr != layout.sections[sectionID].recordIndexToForeignID.end())
+            modelFileData.modelResourcesID = relationshipItr->second;
 
         fs::path filePath = "";
         if (cascLoader->InCascAndListFile(modelFileID))
@@ -214,13 +224,21 @@ bool ClientDBExtractor::ExtractModelFileData(const std::string& name)
 
         modelFileData.model = modelFileDataStorage.AddString(filePath.generic_string());
 
-        auto& modelFileDataEntries = modelResourcesIDToModelFileDataEntry[modelFileData.modelResourcesID];
-        modelFileDataEntries.push_back(modelFileID);
-
-        modelFileDataStorage.Replace(db2RecordIndex + 1, modelFileData);
+        const u32 storageID = db2RecordIndex + 1;
+        modelFileIDByRecordID[storageID] = modelFileID;
+        modelFileDataStorage.Replace(storageID, modelFileData);
     }
 
     RepopulateFromCopyTable<MetaGen::Shared::ClientDB::ModelFileDataRecord>(layout, modelFileDataStorage);
+
+    modelResourcesIDToModelFileDataEntry.clear();
+    modelFileDataStorage.Each([&](u32 recordID, MetaGen::Shared::ClientDB::ModelFileDataRecord& modelFileData)
+    {
+        const auto fileItr = modelFileIDByRecordID.find(recordID);
+        if (fileItr != modelFileIDByRecordID.end())
+            modelResourcesIDToModelFileDataEntry[modelFileData.modelResourcesID].push_back(fileItr->second);
+        return true;
+    });
 
     Runtime* runtime = ServiceLocator::GetRuntime();
 

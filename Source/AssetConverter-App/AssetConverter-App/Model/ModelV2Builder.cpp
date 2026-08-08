@@ -1,16 +1,22 @@
 #include "ModelV2Builder.h"
 #include "ModelV2Allocation.h"
+#include "DisplayData.h"
 
+#include "AssetConverter-App/Extractors/ClientDBExtractor.h"
+#include "AssetConverter-App/Casc/CascLoader.h"
 #include "AssetConverter-App/Runtime.h"
+#include "AssetConverter-App/Util/ServiceLocator.h"
 
 #include <Base/Memory/Bytebuffer.h>
 #include <Base/Util/DebugHandler.h>
 
 #include <FileFormat/Novus/Model/Material.h>
+#include <FileFormat/Novus/Model/MaterialABI.h>
 #include <FileFormat/Novus/Model/Model.h>
 #include <FileFormat/Shared.h>
 #include <FileFormat/Warcraft/M2/M2.h>
 #include <FileFormat/Warcraft/WMO/Wmo.h>
+#include <MetaGen/Shared/ClientDB/ClientDB.h>
 
 #include <meshoptimizer.h>
 #include <xxhash/xxhash64.h>
@@ -30,13 +36,19 @@
 #include <iomanip>
 #include <limits>
 #include <mutex>
+#include <map>
+#include <set>
 #include <sstream>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace
 {
+    static_assert(static_cast<u8>(DisplayData::Source::CreatureDisplayInfo) == 0);
+    static_assert(static_cast<u8>(DisplayData::Source::ItemDisplayInfo) == 1);
+
     namespace CookSettings
     {
         // Each optimization is deliberately independent. Turning one off is a
@@ -60,17 +72,14 @@ namespace
         inline constexpr f32 MeshletConeWeight = 0.5f;
     }
 
-    namespace WowMaterialABI
+    namespace LegacyMaterialABI
     {
-        inline constexpr u32 Version = 1;
-        inline constexpr u32 ManifestSchemaVersion = 1;
-        inline constexpr u32 MaxTextures = 8;
-        inline constexpr u32 BaseColorOffset = 0;
-        inline constexpr u32 TextureOffset = 16;
-        inline constexpr u32 LegacyUnitOffset = 48;
-        inline constexpr u32 FlagsOffset = 80;
-        inline constexpr u32 AlphaCutoffOffset = 84;
-        inline constexpr u32 ParameterBlockSize = 96;
+        inline constexpr u32 Version = FileFormat::Material::ABI::VERSION;
+        inline constexpr u32 ManifestSchemaVersion = 2;
+        inline constexpr u32 MaxTextures = FileFormat::Material::ABI::LegacyModel::MAX_TEXTURES;
+        inline constexpr u32 BaseColorOffset = FileFormat::Material::ABI::ParameterLayout::BASE_COLOR_FACTOR_OFFSET;
+        inline constexpr u32 AlphaCutoffOffset = FileFormat::Material::ABI::ParameterLayout::ALPHA_CUTOFF_OFFSET;
+        inline constexpr u32 ParameterBlockSize = FileFormat::Material::ABI::ParameterLayout::BLOCK_SIZE;
 
         enum LightingModel : u16
         {
@@ -236,6 +245,7 @@ namespace
     {
         u64 assetID = FileFormat::INVALID_ASSET_ID;
         u16 samplerID = 0;
+        M2::M2Texture::Type replacementType = M2::M2Texture::Type::None;
     };
 
     struct SourceTextureUnit
@@ -355,20 +365,21 @@ namespace
             bool operator==(const ProgramDefinition&) const = default;
         };
 
-        FileFormat::Material::RasterClass rasterClass = FileFormat::Material::RasterClass::Solid;
-        u32 flags = FileFormat::Material::MaterialFlags_CastsShadows |
-            FileFormat::Material::MaterialFlags_ReceivesDecals |
-            FileFormat::Material::MaterialFlags_ReceivesFog;
-        u16 lightingModelID = WowMaterialABI::Standard;
-        u16 executionGroupID = WowMaterialABI::OpaqueSimple;
+        FileFormat::Material::RasterClass rasterClass = FileFormat::Material::RasterClass::Opaque;
+        u32 flags = FileFormat::Material::MaterialInstanceFlags_CastsShadows |
+            FileFormat::Material::MaterialInstanceFlags_ReceivesDecals |
+            FileFormat::Material::MaterialInstanceFlags_ReceivesFog;
+        u16 lightingModelID = LegacyMaterialABI::Standard;
+        u16 executionGroupID = LegacyMaterialABI::OpaqueSimple;
         u32 programID = 0;
         FileFormat::Material::MaterialProgramKey programKey = FileFormat::Material::INVALID_MATERIAL_PROGRAM_KEY;
         u64 instanceSignature = 0;
         ProgramDefinition programDefinition;
         std::vector<ProgramUnit> programUnits;
-        std::array<u64, WowMaterialABI::MaxTextures> textureAssetIDs = {};
-        std::array<u16, WowMaterialABI::MaxTextures> samplerIDs = {};
-        std::array<u32, WowMaterialABI::MaxTextures> legacyUnits = {};
+        std::array<u64, LegacyMaterialABI::MaxTextures> textureAssetIDs = {};
+        std::array<u16, LegacyMaterialABI::MaxTextures> samplerIDs = {};
+        std::array<M2::M2Texture::Type, LegacyMaterialABI::MaxTextures> replacementTypes = {};
+        std::array<u32, LegacyMaterialABI::MaxTextures> legacyUnits = {};
         u32 textureCount = 0;
         f32 alphaCutoff = 0.5f;
     };
@@ -378,6 +389,21 @@ namespace
     std::unordered_map<u64, MaterialDescription> gPendingMaterials;
     std::unordered_map<FileFormat::Material::MaterialProgramKey, MaterialDescription> gMaterialProgramDefinitions;
 
+    struct DisplayMaterialSlotRecipe
+    {
+        u32 stableID = 0;
+        MaterialDescription material;
+    };
+
+    struct DisplayMaterialModelRecipe
+    {
+        u64 modelAssetID = FileFormat::INVALID_ASSET_ID;
+        std::string modelPath;
+        std::vector<DisplayMaterialSlotRecipe> slots;
+    };
+
+    std::unordered_map<u64, DisplayMaterialModelRecipe> gDisplayMaterialRecipes;
+
     u64 HashBytes(const void* data, size_t size)
     {
         return XXHash64::hash(data, size, 0);
@@ -386,6 +412,16 @@ namespace
     u64 HashString(const std::string& value)
     {
         return HashBytes(value.data(), value.size());
+    }
+
+    u64 HashModelV2Path(const std::string& convertedClientDBPath)
+    {
+        std::filesystem::path path = convertedClientDBPath;
+        path.replace_extension(FileFormat::Model::FILE_EXTENSION);
+        std::string canonicalPath = path.generic_string();
+        std::transform(canonicalPath.begin(), canonicalPath.end(), canonicalPath.begin(),
+            [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+        return HashString(canonicalPath);
     }
 
     std::string Hex(u64 value)
@@ -398,6 +434,45 @@ namespace
     u32 FoldHash32(u64 value)
     {
         return static_cast<u32>(value) ^ static_cast<u32>(value >> 32u);
+    }
+
+    void RefreshMaterialInstanceSignature(MaterialDescription& description)
+    {
+        std::vector<u8> instanceBytes;
+        instanceBytes.reserve(description.programDefinition.size + sizeof(description.textureAssetIDs) + sizeof(description.samplerIDs) + 16);
+        instanceBytes.insert(instanceBytes.end(), description.programDefinition.bytes.begin(),
+            description.programDefinition.bytes.begin() + description.programDefinition.size);
+        const u8* textureBytes = reinterpret_cast<const u8*>(description.textureAssetIDs.data());
+        instanceBytes.insert(instanceBytes.end(), textureBytes, textureBytes + sizeof(description.textureAssetIDs));
+        const u8* samplerBytes = reinterpret_cast<const u8*>(description.samplerIDs.data());
+        instanceBytes.insert(instanceBytes.end(), samplerBytes, samplerBytes + sizeof(description.samplerIDs));
+        const u8* rasterBytes = reinterpret_cast<const u8*>(&description.rasterClass);
+        instanceBytes.insert(instanceBytes.end(), rasterBytes, rasterBytes + sizeof(description.rasterClass));
+        const u8* lightingBytes = reinterpret_cast<const u8*>(&description.lightingModelID);
+        instanceBytes.insert(instanceBytes.end(), lightingBytes, lightingBytes + sizeof(description.lightingModelID));
+        const u8* flagBytes = reinterpret_cast<const u8*>(&description.flags);
+        instanceBytes.insert(instanceBytes.end(), flagBytes, flagBytes + sizeof(description.flags));
+        const u8* cutoffBytes = reinterpret_cast<const u8*>(&description.alphaCutoff);
+        instanceBytes.insert(instanceBytes.end(), cutoffBytes, cutoffBytes + sizeof(description.alphaCutoff));
+        description.instanceSignature = HashBytes(instanceBytes.data(), instanceBytes.size());
+    }
+
+    bool IsDisplaySelected(const MaterialDescription& description)
+    {
+        return std::any_of(description.replacementTypes.begin(), description.replacementTypes.end(),
+            [](M2::M2Texture::Type type) { return type != M2::M2Texture::Type::None; });
+    }
+
+    const char* TextureTypeName(M2::M2Texture::Type type);
+
+    bool HasCompleteTextureBindings(const MaterialDescription& description)
+    {
+        for (u32 textureIndex = 0; textureIndex < description.textureCount; ++textureIndex)
+        {
+            if (description.textureAssetIDs[textureIndex] == FileFormat::INVALID_ASSET_ID)
+                return false;
+        }
+        return true;
     }
 
     bool AddGeneratedFileLocked(Runtime* runtime, const std::string& path, std::shared_ptr<Bytebuffer>& buffer)
@@ -775,9 +850,9 @@ namespace
         // The canonical key describes source program semantics, not converter
         // routing. Keep these versioned fields in the byte definition so an ABI
         // or manifest-contract change cannot silently reuse an older key.
-        appendProgram(WowMaterialABI::ManifestSchemaVersion);
-        appendProgram(WowMaterialABI::Version);
-        appendProgram(WowMaterialABI::ParameterBlockSize);
+        appendProgram(LegacyMaterialABI::ManifestSchemaVersion);
+        appendProgram(LegacyMaterialABI::Version);
+        appendProgram(LegacyMaterialABI::ParameterBlockSize);
         const u32 sourceUnitCount = static_cast<u32>(batch.textureUnits.size());
         appendProgram(sourceUnitCount);
 
@@ -810,7 +885,7 @@ namespace
                 programUnit.isTwoSided = material.isTwoSided;
             }
 
-            // Preserve the authored WoW shader ID. Material programs are still
+            // Preserve the authored legacy shader ID. Material programs are still
             // placeholders, and the raw value is a lossless discriminator for
             // the eventual Game-side program mapping.
             const u32 packedUnit = static_cast<u16>(unit.shaderID) |
@@ -834,12 +909,13 @@ namespace
 
             for (u32 textureIndex : unit.textureIndices)
             {
-                if (result.textureCount >= WowMaterialABI::MaxTextures)
+                if (result.textureCount >= LegacyMaterialABI::MaxTextures)
                     break;
                 if (textureIndex >= source.textures.size())
                     continue;
                 result.textureAssetIDs[result.textureCount] = source.textures[textureIndex].assetID;
                 result.samplerIDs[result.textureCount] = source.textures[textureIndex].samplerID;
+                result.replacementTypes[result.textureCount] = source.textures[textureIndex].replacementType;
                 ++result.textureCount;
             }
         }
@@ -848,25 +924,24 @@ namespace
         {
             case SourceBlendMode::AlphaKey:
                 result.rasterClass = FileFormat::Material::RasterClass::AlphaTest;
-                result.flags |= FileFormat::Material::MaterialFlags_HasCoverageFunction;
-                result.executionGroupID = batch.textureUnits.size() <= 1 ? WowMaterialABI::AlphaTestSimple : WowMaterialABI::AlphaTestLayered;
+                result.executionGroupID = batch.textureUnits.size() <= 1 ? LegacyMaterialABI::AlphaTestSimple : LegacyMaterialABI::AlphaTestLayered;
                 break;
             case SourceBlendMode::Opaque:
-                result.rasterClass = FileFormat::Material::RasterClass::Solid;
-                result.executionGroupID = batch.textureUnits.size() <= 1 ? WowMaterialABI::OpaqueSimple : WowMaterialABI::OpaqueLayered;
+                result.rasterClass = FileFormat::Material::RasterClass::Opaque;
+                result.executionGroupID = batch.textureUnits.size() <= 1 ? LegacyMaterialABI::OpaqueSimple : LegacyMaterialABI::OpaqueLayered;
                 break;
             default:
                 result.rasterClass = FileFormat::Material::RasterClass::Transparent;
-                result.flags &= ~FileFormat::Material::MaterialFlags_CastsShadows;
-                result.executionGroupID = batch.textureUnits.size() <= 1 ? WowMaterialABI::TransparentSimple : WowMaterialABI::TransparentLayered;
+                result.flags &= ~FileFormat::Material::MaterialInstanceFlags_CastsShadows;
+                result.executionGroupID = batch.textureUnits.size() <= 1 ? LegacyMaterialABI::TransparentSimple : LegacyMaterialABI::TransparentLayered;
                 break;
         }
 
         if (isTwoSided)
-            result.flags |= FileFormat::Material::MaterialFlags_TwoSided;
+            result.flags |= FileFormat::Material::MaterialInstanceFlags_TwoSided;
         if (!receivesFog)
-            result.flags &= ~FileFormat::Material::MaterialFlags_ReceivesFog;
-        result.lightingModelID = isUnlit ? WowMaterialABI::Unlit : WowMaterialABI::Standard;
+            result.flags &= ~FileFormat::Material::MaterialInstanceFlags_ReceivesFog;
+        result.lightingModelID = isUnlit ? LegacyMaterialABI::Unlit : LegacyMaterialABI::Standard;
 
         appendProgram(result.rasterClass);
         appendProgram(result.flags);
@@ -879,12 +954,7 @@ namespace
         result.programKey = HashBytes(programBytes.data(), programBytes.size());
         result.programID = FoldHash32(result.programKey);
 
-        std::vector<u8> instanceBytes = programBytes;
-        const u8* textureBytes = reinterpret_cast<const u8*>(result.textureAssetIDs.data());
-        instanceBytes.insert(instanceBytes.end(), textureBytes, textureBytes + sizeof(result.textureAssetIDs));
-        const u8* samplerBytes = reinterpret_cast<const u8*>(result.samplerIDs.data());
-        instanceBytes.insert(instanceBytes.end(), samplerBytes, samplerBytes + sizeof(result.samplerIDs));
-        result.instanceSignature = HashBytes(instanceBytes.data(), instanceBytes.size());
+        RefreshMaterialInstanceSignature(result);
         return result;
     }
 
@@ -896,22 +966,28 @@ namespace
             data.parameters.push_back({ HashBytes(name, std::strlen(name)), offset, size, type, 1 });
         };
 
-        addParameter("BaseColorFactor", WowMaterialABI::BaseColorOffset, 16, FileFormat::Material::ParameterType::Float4);
-        for (u32 i = 0; i < WowMaterialABI::MaxTextures; ++i)
-        {
-            const std::string textureName = "Texture" + std::to_string(i);
-            addParameter(textureName.c_str(), WowMaterialABI::TextureOffset + i * 4, 4, FileFormat::Material::ParameterType::Texture2D);
-            const std::string unitName = "LegacyUnit" + std::to_string(i);
-            addParameter(unitName.c_str(), WowMaterialABI::LegacyUnitOffset + i * 4, 4, FileFormat::Material::ParameterType::UInt);
-        }
-        addParameter("MaterialFlags", WowMaterialABI::FlagsOffset, 4, FileFormat::Material::ParameterType::UInt);
-        addParameter("AlphaCutoff", WowMaterialABI::AlphaCutoffOffset, 4, FileFormat::Material::ParameterType::Float);
+        using namespace FileFormat::Material::ABI::ParameterLayout;
+        addParameter("baseColorFactor", BASE_COLOR_FACTOR_OFFSET, 16, FileFormat::Material::ParameterType::Float4);
+        addParameter("emissiveFactor", EMISSIVE_FACTOR_OFFSET, 12, FileFormat::Material::ParameterType::Float3);
+        addParameter("emissiveIntensity", EMISSIVE_INTENSITY_OFFSET, 4, FileFormat::Material::ParameterType::Float);
+        addParameter("metallicFactor", METALLIC_FACTOR_OFFSET, 4, FileFormat::Material::ParameterType::Float);
+        addParameter("roughnessFactor", ROUGHNESS_FACTOR_OFFSET, 4, FileFormat::Material::ParameterType::Float);
+        addParameter("normalScale", NORMAL_SCALE_OFFSET, 4, FileFormat::Material::ParameterType::Float);
+        addParameter("occlusionStrength", OCCLUSION_STRENGTH_OFFSET, 4, FileFormat::Material::ParameterType::Float);
+        addParameter("opacity", OPACITY_OFFSET, 4, FileFormat::Material::ParameterType::Float);
+        addParameter("alphaCutoff", ALPHA_CUTOFF_OFFSET, 4, FileFormat::Material::ParameterType::Float);
 
-        data.defaultParameterData.resize(WowMaterialABI::ParameterBlockSize, 0);
+        data.defaultParameterData.resize(LegacyMaterialABI::ParameterBlockSize, 0);
         const vec4 white(1.0f);
-        std::memcpy(data.defaultParameterData.data() + WowMaterialABI::BaseColorOffset, &white, sizeof(white));
+        std::memcpy(data.defaultParameterData.data() + LegacyMaterialABI::BaseColorOffset, &white, sizeof(white));
+        const f32 one = 1.0f;
+        std::memcpy(data.defaultParameterData.data() + EMISSIVE_INTENSITY_OFFSET, &one, sizeof(one));
+        std::memcpy(data.defaultParameterData.data() + ROUGHNESS_FACTOR_OFFSET, &one, sizeof(one));
+        std::memcpy(data.defaultParameterData.data() + NORMAL_SCALE_OFFSET, &one, sizeof(one));
+        std::memcpy(data.defaultParameterData.data() + OCCLUSION_STRENGTH_OFFSET, &one, sizeof(one));
+        std::memcpy(data.defaultParameterData.data() + OPACITY_OFFSET, &one, sizeof(one));
         const f32 alphaCutoff = 0.5f;
-        std::memcpy(data.defaultParameterData.data() + WowMaterialABI::AlphaCutoffOffset, &alphaCutoff, sizeof(alphaCutoff));
+        std::memcpy(data.defaultParameterData.data() + LegacyMaterialABI::AlphaCutoffOffset, &alphaCutoff, sizeof(alphaCutoff));
         return data;
     }
 
@@ -940,7 +1016,7 @@ namespace
         using Class = FileFormat::Material::RasterClass;
         switch (rasterClass)
         {
-            case Class::Solid: return "Solid";
+            case Class::Opaque: return "Opaque";
             case Class::AlphaTest: return "AlphaTest";
             case Class::Transparent: return "Transparent";
         }
@@ -978,13 +1054,13 @@ namespace
         });
 
         nlohmann::ordered_json manifest;
-        manifest["schemaVersion"] = WowMaterialABI::ManifestSchemaVersion;
-        manifest["materialABIVersion"] = WowMaterialABI::Version;
+        manifest["schemaVersion"] = LegacyMaterialABI::ManifestSchemaVersion;
+        manifest["materialABIVersion"] = LegacyMaterialABI::Version;
         manifest["programCount"] = programs.size();
-        manifest["parameterBlockSize"] = WowMaterialABI::ParameterBlockSize;
+        manifest["parameterBlockSize"] = LegacyMaterialABI::ParameterBlockSize;
         manifest["parameterBlockAlignment"] = 16;
         manifest["parameterLayoutHash"] = FileFormat::Material::CalculateParameterLayoutHash(
-            materialData.parameters, WowMaterialABI::ParameterBlockSize);
+            materialData.parameters, LegacyMaterialABI::ParameterBlockSize);
         manifest["parameters"] = nlohmann::ordered_json::array();
         for (const FileFormat::Material::ParameterDefinition& parameter : materialData.parameters)
         {
@@ -1002,7 +1078,7 @@ namespace
         for (const MaterialDescription& program : programs)
         {
             nlohmann::ordered_json definition;
-            definition["canonicalKey"] = "wow/" + Hex(program.programKey);
+            definition["canonicalKey"] = "legacy/" + Hex(program.programKey);
             definition["programKey"] = program.programKey;
             definition["programID"] = program.programID;
             definition["canonicalDefinition"] = BytesToHex(
@@ -1010,7 +1086,10 @@ namespace
             definition["lightingModelID"] = program.lightingModelID;
             definition["rasterClass"] = static_cast<u8>(program.rasterClass);
             definition["rasterClassName"] = RasterClassName(program.rasterClass);
-            definition["materialFlags"] = program.flags;
+            definition["materialFlags"] =
+                program.rasterClass == FileFormat::Material::RasterClass::AlphaTest
+                    ? FileFormat::Material::MaterialFlags_HasCoverageFunction
+                    : FileFormat::Material::MaterialFlags_None;
             definition["units"] = nlohmann::ordered_json::array();
             for (u32 unitIndex = 0; unitIndex < program.programUnits.size(); ++unitIndex)
             {
@@ -1065,15 +1144,15 @@ namespace
 
     bool ValidateMaterialData(const FileFormat::Material::MaterialData& data)
     {
-        if (data.defaultParameterData.size() != WowMaterialABI::ParameterBlockSize || data.parameters.empty())
+        if (data.defaultParameterData.size() != LegacyMaterialABI::ParameterBlockSize || data.parameters.empty())
             return false;
 
-        std::array<bool, WowMaterialABI::ParameterBlockSize> occupiedBytes = {};
+        std::array<bool, LegacyMaterialABI::ParameterBlockSize> occupiedBytes = {};
         std::unordered_set<u64> parameterNames;
         for (const FileFormat::Material::ParameterDefinition& parameter : data.parameters)
         {
             if (parameter.nameHash == 0 || parameter.byteSize == 0 || parameter.arrayCount != 1 ||
-                static_cast<u64>(parameter.byteOffset) + parameter.byteSize > WowMaterialABI::ParameterBlockSize ||
+                static_cast<u64>(parameter.byteOffset) + parameter.byteSize > LegacyMaterialABI::ParameterBlockSize ||
                 !parameterNames.insert(parameter.nameHash).second)
                 return false;
             for (u32 byteIndex = parameter.byteOffset; byteIndex < parameter.byteOffset + parameter.byteSize; ++byteIndex)
@@ -1086,67 +1165,72 @@ namespace
         return true;
     }
 
+    bool EmitMaterialProgramAsset(Runtime* runtime, const MaterialDescription& description,
+        const FileFormat::Material::MaterialData& materialData)
+    {
+        const std::string materialPath = "material/generated/legacy/program_" + Hex(description.programKey) +
+            FileFormat::Material::MATERIAL_FILE_EXTENSION;
+        std::scoped_lock lock(gGeneratedMaterialMutex);
+        if (gGeneratedMaterialPaths.contains(HashString(materialPath)))
+            return true;
+
+        FileFormat::Material::MaterialAsset material;
+        material.programKey = description.programKey;
+        material.programID = description.programID;
+        material.flags = description.rasterClass == FileFormat::Material::RasterClass::AlphaTest
+            ? FileFormat::Material::MaterialFlags_HasCoverageFunction : FileFormat::Material::MaterialFlags_None;
+        material.parameterBlockSize = LegacyMaterialABI::ParameterBlockSize;
+        material.textureSlotCount = description.textureCount;
+
+        std::shared_ptr<Bytebuffer> materialBuffer = Bytebuffer::BorrowRuntime(material.GetSerializedSize(materialData));
+        return material.Save(materialBuffer, materialData) && AddGeneratedFileLocked(runtime, materialPath, materialBuffer);
+    }
+
     bool EmitMaterialAssets(Runtime* runtime, const MaterialDescription& description,
         const FileFormat::Material::MaterialData& materialData, u64& instanceAssetID)
     {
-        const std::string materialPath = "material/generated/wow/program_" + Hex(description.programKey) + FileFormat::Material::MATERIAL_FILE_EXTENSION;
-        const std::string instancePath = "material/generated/wow/instance_" + Hex(description.instanceSignature) + FileFormat::Material::MATERIAL_INSTANCE_FILE_EXTENSION;
+        const std::string materialPath = "material/generated/legacy/program_" + Hex(description.programKey) + FileFormat::Material::MATERIAL_FILE_EXTENSION;
+        const std::string instancePath = "material/generated/legacy/instance_" + Hex(description.instanceSignature) + FileFormat::Material::MATERIAL_INSTANCE_FILE_EXTENSION;
         instanceAssetID = HashString(instancePath);
 
-        // Most WoW batches reuse one of a comparatively small number of
+        if (!EmitMaterialProgramAsset(runtime, description, materialData))
+            return false;
+
+        // Most source batches reuse one of a comparatively small number of
         // programs/instances. Check the cache before constructing parameter
         // metadata or serializing buffers; the old ordering repeated that work
         // for every submesh and was particularly costly for large WMOs.
         std::scoped_lock lock(gGeneratedMaterialMutex);
-        const bool hasMaterial = gGeneratedMaterialPaths.contains(HashString(materialPath));
         const bool hasInstance = gGeneratedMaterialPaths.contains(HashString(instancePath));
-        if (hasMaterial && hasInstance)
-            return true;
-
-        if (!hasMaterial)
-        {
-            FileFormat::Material::MaterialAsset material;
-            material.programKey = description.programKey;
-            material.programID = description.programID;
-            material.lightingModelID = description.lightingModelID;
-            material.materialExecutionGroupID = description.executionGroupID;
-            material.rasterClass = description.rasterClass;
-            material.flags = description.flags;
-            material.parameterBlockSize = WowMaterialABI::ParameterBlockSize;
-
-            std::shared_ptr<Bytebuffer> materialBuffer = Bytebuffer::BorrowRuntime(material.GetSerializedSize(materialData));
-            if (!material.Save(materialBuffer, materialData) || !AddGeneratedFileLocked(runtime, materialPath, materialBuffer))
-                return false;
-        }
-
         if (hasInstance)
             return true;
 
         FileFormat::Material::MaterialInstanceData instanceData;
         instanceData.parameterData = materialData.defaultParameterData;
-        for (u32 i = 0; i < WowMaterialABI::MaxTextures; ++i)
+        for (u32 i = 0; i < LegacyMaterialABI::MaxTextures; ++i)
         {
-            std::memcpy(instanceData.parameterData.data() + WowMaterialABI::LegacyUnitOffset + i * 4, &description.legacyUnits[i], sizeof(u32));
             if (description.textureAssetIDs[i] != FileFormat::INVALID_ASSET_ID)
             {
-                instanceData.resourceBindings.push_back({ description.textureAssetIDs[i], WowMaterialABI::TextureOffset + i * 4,
+                instanceData.textureBindings.push_back({ description.textureAssetIDs[i], i,
                     description.samplerIDs[i], FileFormat::Material::ResourceType::Texture2D, FileFormat::Material::ResourceBindingFlags_None });
             }
         }
-        std::memcpy(instanceData.parameterData.data() + WowMaterialABI::FlagsOffset, &description.flags, sizeof(description.flags));
-        std::memcpy(instanceData.parameterData.data() + WowMaterialABI::AlphaCutoffOffset, &description.alphaCutoff, sizeof(description.alphaCutoff));
+        std::memcpy(instanceData.parameterData.data() + LegacyMaterialABI::AlphaCutoffOffset, &description.alphaCutoff, sizeof(description.alphaCutoff));
 
         FileFormat::Material::MaterialInstanceAsset instance;
         instance.materialAssetID = HashString(materialPath);
         instance.parameterLayoutHash = FileFormat::Material::CalculateParameterLayoutHash(
-            materialData.parameters, WowMaterialABI::ParameterBlockSize);
+            materialData.parameters, LegacyMaterialABI::ParameterBlockSize);
+        instance.flags = description.flags;
+        instance.lightingModelID = description.lightingModelID;
+        instance.rasterClass = description.rasterClass;
         std::shared_ptr<Bytebuffer> instanceBuffer = Bytebuffer::BorrowRuntime(instance.GetSerializedSize(instanceData));
         return instance.Save(instanceBuffer, instanceData) && AddGeneratedFileLocked(runtime, instancePath, instanceBuffer);
     }
 
     bool QueueOrEmitMaterialAssets(Runtime* runtime, const MaterialDescription& description, u64& instanceAssetID)
     {
-        const std::string instancePath = "material/generated/wow/instance_" + Hex(description.instanceSignature) +
+        const std::string instancePath = "material/generated/legacy/instance_" + Hex(description.instanceSignature) +
             FileFormat::Material::MATERIAL_INSTANCE_FILE_EXTENSION;
         instanceAssetID = HashString(instancePath);
         if (!CookSettings::DeferMaterialEmission)
@@ -1413,9 +1497,26 @@ namespace
             if ((attributes.tangent & 0x80000000u) != 0)
                 return false;
         }
+        std::unordered_set<u32> materialSlotStableIDs;
         for (const FileFormat::Model::MaterialSlot& slot : data.materialSlots)
         {
-            if (slot.defaultMaterialInstanceAssetID == FileFormat::INVALID_ASSET_ID)
+            if (slot.defaultMaterialInstanceAssetID == FileFormat::INVALID_ASSET_ID || slot.nameHash == 0 ||
+                slot.reserved != 0 || !materialSlotStableIDs.insert(slot.stableID).second)
+                return false;
+        }
+
+        std::unordered_set<u32> parameterStableIDs;
+        for (const FileFormat::Model::Parameter& parameter : data.parameters)
+        {
+            if (parameter.nameHash == 0 || parameter.reserved0 != 0 || parameter.reserved1 != 0 ||
+                !parameterStableIDs.insert(parameter.stableID).second)
+                return false;
+        }
+        for (const FileFormat::Model::ParameterBinding& binding : data.parameterBindings)
+        {
+            if (!parameterStableIDs.contains(binding.parameterStableID) ||
+                !materialSlotStableIDs.contains(binding.materialSlotStableID) || binding.reserved0 != 0 ||
+                binding.reserved1 != 0 || binding.target != FileFormat::Model::ParameterBindingTarget::TextureSlot)
                 return false;
         }
 
@@ -1601,14 +1702,55 @@ namespace
 
         const auto materialStart = MeshoptimizerTiming::Start();
         data.materialSlots.reserve(source.batches.size());
+        std::vector<DisplayMaterialSlotRecipe> displayMaterialSlots;
+        std::unordered_set<u32> displayParameterIDs;
         for (u32 batchIndex = 0; batchIndex < source.batches.size(); ++batchIndex)
         {
             const MaterialDescription description = DescribeMaterial(source, source.batches[batchIndex]);
             u64 instanceAssetID = FileFormat::INVALID_ASSET_ID;
             if (!QueueOrEmitMaterialAssets(runtime, description, instanceAssetID))
                 return false;
+            if (IsDisplaySelected(description))
+            {
+                displayMaterialSlots.push_back({ batchIndex, description });
+                for (u32 textureSlot = 0; textureSlot < description.textureCount; ++textureSlot)
+                {
+                    const M2::M2Texture::Type replacementType = description.replacementTypes[textureSlot];
+                    if (replacementType == M2::M2Texture::Type::None)
+                        continue;
+
+                    const u32 parameterStableID = static_cast<u32>(replacementType);
+                    if (displayParameterIDs.insert(parameterStableID).second)
+                    {
+                        FileFormat::Model::Parameter parameter;
+                        parameter.nameHash = HashString(TextureTypeName(replacementType));
+                        parameter.stableID = parameterStableID;
+                        parameter.type = FileFormat::Model::ParameterType::Texture2D;
+                        parameter.defaultValue[0] = FileFormat::INVALID_ASSET_ID;
+                        data.parameters.push_back(parameter);
+                    }
+
+                    data.parameterBindings.push_back({
+                        parameterStableID,
+                        batchIndex,
+                        static_cast<u16>(textureSlot),
+                        FileFormat::Model::ParameterBindingTarget::TextureSlot,
+                        0,
+                        0
+                    });
+                }
+            }
             data.materialSlots.push_back({ instanceAssetID, HashString(outputPath + "/material_" + std::to_string(batchIndex)), batchIndex, 0 });
         }
+        std::sort(data.parameters.begin(), data.parameters.end(), [](const auto& left, const auto& right)
+        {
+            return left.stableID < right.stableID;
+        });
+        std::sort(data.parameterBindings.begin(), data.parameterBindings.end(), [](const auto& left, const auto& right)
+        {
+            return std::tie(left.parameterStableID, left.materialSlotStableID, left.target, left.targetIndex) <
+                std::tie(right.parameterStableID, right.materialSlotStableID, right.target, right.targetIndex);
+        });
         mesh.numMaterialSlots = static_cast<u32>(data.materialSlots.size());
         MeshoptimizerTiming::Add(MeshoptimizerTiming::MaterialProcessing, materialStart);
 
@@ -1714,7 +1856,18 @@ namespace
         auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, buffer->writtenData);
         const bool added = manifest.AddFile(runtime, outputPath, buffer);
         if (added)
+        {
             ModelV2AllocationRegistry::Register(HashString(outputPath), asset, data);
+            if (!displayMaterialSlots.empty())
+            {
+                DisplayMaterialModelRecipe recipe;
+                recipe.modelAssetID = HashString(outputPath);
+                recipe.modelPath = outputPath;
+                recipe.slots = std::move(displayMaterialSlots);
+                std::scoped_lock lock(gGeneratedMaterialMutex);
+                gDisplayMaterialRecipes[recipe.modelAssetID] = std::move(recipe);
+            }
+        }
         MeshoptimizerTiming::Add(MeshoptimizerTiming::PactWrite, pactWriteStart);
         return added;
     }
@@ -1734,6 +1887,298 @@ namespace
             default: return SourceBlendMode::Opaque;
         }
     }
+
+    bool ResolveTexturePathAssetID(ClientDB::Data& storage, StringRef stringRef, u64& assetID)
+    {
+        const std::string& path = storage.GetString(stringRef);
+        if (path.empty())
+            return false;
+        assetID = HashString(path);
+        return true;
+    }
+
+    enum class DisplayMaterialOmissionCategory : u8
+    {
+        RuntimeCustomization,
+        MissingConverterSupport,
+        MissingAuthoritativeSourceData
+    };
+
+    enum class DisplayMaterialOmissionReason : u8
+    {
+        None,
+        RuntimeSkinCustomization,
+        RuntimeHairCustomization,
+        RuntimeFacialHairCustomization,
+        RuntimeSkinExtraCustomization,
+        RuntimeTaurenManeCustomization,
+        RuntimeEyeCustomization,
+        RuntimeAccessoryCustomization,
+        RuntimeSecondaryCustomization,
+        MissingCreatureTextureVariation,
+        MissingItemMaterialResourceMapping,
+        MissingTextureFileData,
+        MissingStaticTextureResource,
+        UnsupportedReplacementTextureType
+    };
+
+    struct DisplayMaterialResolution
+    {
+        DisplayMaterialOmissionReason reason = DisplayMaterialOmissionReason::None;
+        M2::M2Texture::Type textureType = M2::M2Texture::Type::None;
+
+        explicit operator bool() const { return reason == DisplayMaterialOmissionReason::None; }
+    };
+
+    struct DisplayMaterialOmission
+    {
+        DisplayData::Source source = {};
+        u32 displayID = 0;
+        u8 modelVariant = 0;
+        u64 modelAssetID = 0;
+        u32 stableID = 0;
+        DisplayMaterialOmissionReason reason = DisplayMaterialOmissionReason::None;
+        M2::M2Texture::Type textureType = M2::M2Texture::Type::None;
+    };
+
+    DisplayMaterialOmissionReason RuntimeCustomizationReason(M2::M2Texture::Type type)
+    {
+        using TextureType = M2::M2Texture::Type;
+        switch (type)
+        {
+            case TextureType::Skin: return DisplayMaterialOmissionReason::RuntimeSkinCustomization;
+            case TextureType::CharacterHair: return DisplayMaterialOmissionReason::RuntimeHairCustomization;
+            case TextureType::CharacterFacialHair: return DisplayMaterialOmissionReason::RuntimeFacialHairCustomization;
+            case TextureType::SkinExtra: return DisplayMaterialOmissionReason::RuntimeSkinExtraCustomization;
+            case TextureType::TaurenMane: return DisplayMaterialOmissionReason::RuntimeTaurenManeCustomization;
+            case TextureType::CharacterEyes: return DisplayMaterialOmissionReason::RuntimeEyeCustomization;
+            case TextureType::CharacterAccessory: return DisplayMaterialOmissionReason::RuntimeAccessoryCustomization;
+            case TextureType::CharacterSecondarySkin:
+            case TextureType::CharacterSecondaryHair:
+            case TextureType::CharacterSecondaryArmor:
+                return DisplayMaterialOmissionReason::RuntimeSecondaryCustomization;
+            default: return DisplayMaterialOmissionReason::None;
+        }
+    }
+
+    DisplayMaterialResolution Omitted(DisplayMaterialOmissionReason reason, M2::M2Texture::Type type)
+    {
+        return { reason, type };
+    }
+
+    const char* OmissionReasonName(DisplayMaterialOmissionReason reason)
+    {
+        switch (reason)
+        {
+            case DisplayMaterialOmissionReason::None: return "None";
+            case DisplayMaterialOmissionReason::RuntimeSkinCustomization: return "RuntimeSkinCustomization";
+            case DisplayMaterialOmissionReason::RuntimeHairCustomization: return "RuntimeHairCustomization";
+            case DisplayMaterialOmissionReason::RuntimeFacialHairCustomization: return "RuntimeFacialHairCustomization";
+            case DisplayMaterialOmissionReason::RuntimeSkinExtraCustomization: return "RuntimeSkinExtraCustomization";
+            case DisplayMaterialOmissionReason::RuntimeTaurenManeCustomization: return "RuntimeTaurenManeCustomization";
+            case DisplayMaterialOmissionReason::RuntimeEyeCustomization: return "RuntimeEyeCustomization";
+            case DisplayMaterialOmissionReason::RuntimeAccessoryCustomization: return "RuntimeAccessoryCustomization";
+            case DisplayMaterialOmissionReason::RuntimeSecondaryCustomization: return "RuntimeSecondaryCustomization";
+            case DisplayMaterialOmissionReason::MissingCreatureTextureVariation: return "MissingCreatureTextureVariation";
+            case DisplayMaterialOmissionReason::MissingItemMaterialResourceMapping: return "MissingItemMaterialResourceMapping";
+            case DisplayMaterialOmissionReason::MissingTextureFileData: return "MissingTextureFileData";
+            case DisplayMaterialOmissionReason::MissingStaticTextureResource: return "MissingStaticTextureResource";
+            case DisplayMaterialOmissionReason::UnsupportedReplacementTextureType: return "UnsupportedReplacementTextureType";
+        }
+        return "Unknown";
+    }
+
+    DisplayMaterialOmissionCategory OmissionCategory(DisplayMaterialOmissionReason reason)
+    {
+        switch (reason)
+        {
+            case DisplayMaterialOmissionReason::RuntimeSkinCustomization:
+            case DisplayMaterialOmissionReason::RuntimeHairCustomization:
+            case DisplayMaterialOmissionReason::RuntimeFacialHairCustomization:
+            case DisplayMaterialOmissionReason::RuntimeSkinExtraCustomization:
+            case DisplayMaterialOmissionReason::RuntimeTaurenManeCustomization:
+            case DisplayMaterialOmissionReason::RuntimeEyeCustomization:
+            case DisplayMaterialOmissionReason::RuntimeAccessoryCustomization:
+            case DisplayMaterialOmissionReason::RuntimeSecondaryCustomization:
+                return DisplayMaterialOmissionCategory::RuntimeCustomization;
+            case DisplayMaterialOmissionReason::UnsupportedReplacementTextureType:
+                return DisplayMaterialOmissionCategory::MissingConverterSupport;
+            default:
+                return DisplayMaterialOmissionCategory::MissingAuthoritativeSourceData;
+        }
+    }
+
+    const char* OmissionCategoryName(DisplayMaterialOmissionCategory category)
+    {
+        switch (category)
+        {
+            case DisplayMaterialOmissionCategory::RuntimeCustomization: return "RuntimeCustomization";
+            case DisplayMaterialOmissionCategory::MissingConverterSupport: return "MissingConverterSupport";
+            case DisplayMaterialOmissionCategory::MissingAuthoritativeSourceData: return "MissingAuthoritativeSourceData";
+        }
+        return "Unknown";
+    }
+
+    const char* TextureTypeName(M2::M2Texture::Type type)
+    {
+        using TextureType = M2::M2Texture::Type;
+        switch (type)
+        {
+            case TextureType::None: return "None";
+            case TextureType::Skin: return "Skin";
+            case TextureType::ObjectSkin: return "ObjectSkin";
+            case TextureType::WeaponBlade: return "WeaponBlade";
+            case TextureType::WeaponHandle: return "WeaponHandle";
+            case TextureType::Environment: return "Environment";
+            case TextureType::CharacterHair: return "CharacterHair";
+            case TextureType::CharacterFacialHair: return "CharacterFacialHair";
+            case TextureType::SkinExtra: return "SkinExtra";
+            case TextureType::UISkin: return "UISkin";
+            case TextureType::TaurenMane: return "TaurenMane";
+            case TextureType::MonsterSkin1: return "MonsterSkin1";
+            case TextureType::MonsterSkin2: return "MonsterSkin2";
+            case TextureType::MonsterSkin3: return "MonsterSkin3";
+            case TextureType::ItemIcon: return "ItemIcon";
+            case TextureType::GuildBackgroundColor: return "GuildBackgroundColor";
+            case TextureType::GuildEmblemColor: return "GuildEmblemColor";
+            case TextureType::GuildEmblem: return "GuildEmblem";
+            case TextureType::CharacterEyes: return "CharacterEyes";
+            case TextureType::CharacterAccessory: return "CharacterAccessory";
+            case TextureType::CharacterSecondarySkin: return "CharacterSecondarySkin";
+            case TextureType::CharacterSecondaryHair: return "CharacterSecondaryHair";
+            case TextureType::CharacterSecondaryArmor: return "CharacterSecondaryArmor";
+        }
+        return "Unknown";
+    }
+
+    const char* AssignmentSourceName(DisplayData::Source source)
+    {
+        using Source = DisplayData::Source;
+        switch (source)
+        {
+            case Source::CreatureDisplayInfo: return "CreatureDisplayInfo";
+            case Source::ItemDisplayInfo: return "ItemDisplayInfo";
+        }
+        return "Unknown";
+    }
+
+    DisplayMaterialResolution ResolveCreatureDisplayMaterial(MaterialDescription& material,
+        const MetaGen::Shared::ClientDB::CreatureDisplayInfoRecord& display)
+    {
+        using TextureType = M2::M2Texture::Type;
+        for (u32 textureIndex = 0; textureIndex < material.textureCount; ++textureIndex)
+        {
+            const TextureType type = material.replacementTypes[textureIndex];
+            if (type == TextureType::None)
+                continue;
+
+            StringRef textureRef = 0;
+            switch (type)
+            {
+                case TextureType::Skin:
+                {
+                    const auto* extra = ClientDBExtractor::creatureDisplayInfoExtraStorage.TryGet<
+                        MetaGen::Shared::ClientDB::CreatureDisplayInfoExtraRecord>(display.extendedDisplayInfoID);
+                    if (!extra)
+                        return Omitted(DisplayMaterialOmissionReason::RuntimeSkinCustomization, type);
+                    textureRef = extra->bakedTexture;
+                    if (!ResolveTexturePathAssetID(ClientDBExtractor::creatureDisplayInfoExtraStorage,
+                        textureRef, material.textureAssetIDs[textureIndex]))
+                        return Omitted(DisplayMaterialOmissionReason::RuntimeSkinCustomization, type);
+                    break;
+                }
+                case TextureType::MonsterSkin1:
+                case TextureType::MonsterSkin2:
+                case TextureType::MonsterSkin3:
+                {
+                    const u32 variationIndex = static_cast<u32>(type) - static_cast<u32>(TextureType::MonsterSkin1);
+                    textureRef = display.textureVariations[variationIndex];
+                    if (!ResolveTexturePathAssetID(ClientDBExtractor::creatureDisplayInfoStorage,
+                        textureRef, material.textureAssetIDs[textureIndex]))
+                        return Omitted(DisplayMaterialOmissionReason::MissingCreatureTextureVariation, type);
+                    break;
+                }
+                default:
+                {
+                    const DisplayMaterialOmissionReason runtimeReason = RuntimeCustomizationReason(type);
+                    return Omitted(runtimeReason != DisplayMaterialOmissionReason::None ? runtimeReason :
+                        DisplayMaterialOmissionReason::UnsupportedReplacementTextureType, type);
+                }
+            }
+        }
+        RefreshMaterialInstanceSignature(material);
+        return {};
+    }
+
+    struct ItemMaterialLookupKey
+    {
+        u32 displayID = 0;
+        u8 modelVariant = 0;
+        u8 textureType = 0;
+
+        bool operator==(const ItemMaterialLookupKey&) const = default;
+    };
+
+    struct ItemMaterialLookupKeyHash
+    {
+        size_t operator()(const ItemMaterialLookupKey& key) const
+        {
+            return static_cast<size_t>(key.displayID) ^ (static_cast<size_t>(key.modelVariant) << 32u) ^
+                (static_cast<size_t>(key.textureType) << 40u);
+        }
+    };
+
+    bool ResolveMaterialResourceTexture(u32 materialResourcesID, u64& assetID)
+    {
+        const auto itr = ClientDBExtractor::materialResourcesIDToTextureFileDataEntry.find(materialResourcesID);
+        if (itr == ClientDBExtractor::materialResourcesIDToTextureFileDataEntry.end() || itr->second.empty())
+            return false;
+        const auto* texture = ClientDBExtractor::textureFileDataStorage.TryGet<
+            MetaGen::Shared::ClientDB::TextureFileDataRecord>(itr->second.front());
+        return texture && ResolveTexturePathAssetID(ClientDBExtractor::textureFileDataStorage, texture->texture, assetID);
+    }
+
+    DisplayMaterialResolution ResolveItemDisplayMaterial(MaterialDescription& material, u32 displayID, u8 modelVariant,
+        const MetaGen::Shared::ClientDB::ItemDisplayInfoRecord& display,
+        const std::unordered_map<ItemMaterialLookupKey, u32, ItemMaterialLookupKeyHash>& materialLookup)
+    {
+        using TextureType = M2::M2Texture::Type;
+        for (u32 textureIndex = 0; textureIndex < material.textureCount; ++textureIndex)
+        {
+            const TextureType type = material.replacementTypes[textureIndex];
+            if (type == TextureType::None)
+                continue;
+
+            switch (type)
+            {
+                case TextureType::ObjectSkin:
+                case TextureType::WeaponBlade:
+                case TextureType::WeaponHandle:
+                    break;
+                default:
+                {
+                    const DisplayMaterialOmissionReason runtimeReason = RuntimeCustomizationReason(type);
+                    return Omitted(runtimeReason != DisplayMaterialOmissionReason::None ? runtimeReason :
+                        DisplayMaterialOmissionReason::UnsupportedReplacementTextureType, type);
+                }
+            }
+
+            u32 materialResourcesID = 0;
+            const ItemMaterialLookupKey key = { displayID, modelVariant, static_cast<u8>(type) };
+            if (const auto itr = materialLookup.find(key); itr != materialLookup.end())
+                materialResourcesID = itr->second;
+            else if (modelVariant < display.modelMaterialResourcesID.size())
+                materialResourcesID = display.modelMaterialResourcesID[modelVariant];
+
+            if (materialResourcesID == 0)
+                return Omitted(DisplayMaterialOmissionReason::MissingItemMaterialResourceMapping, type);
+            if (!ResolveMaterialResourceTexture(materialResourcesID, material.textureAssetIDs[textureIndex]))
+                return Omitted(DisplayMaterialOmissionReason::MissingTextureFileData, type);
+        }
+        RefreshMaterialInstanceSignature(material);
+        return {};
+    }
+
 }
 
 u64 ModelV2Builder::MeshoptimizerTimings::GetTotalNanoseconds() const
@@ -1789,9 +2234,253 @@ bool ModelV2Builder::FlushPendingMaterials(Runtime* runtime)
         if (!EmitMaterialAssets(runtime, description, materialData, emittedAssetID) || emittedAssetID != assetID)
             return false;
     }
+    std::vector<MaterialDescription> programDefinitions;
+    {
+        std::scoped_lock lock(gGeneratedMaterialMutex);
+        programDefinitions.reserve(gMaterialProgramDefinitions.size());
+        for (const auto& [programKey, description] : gMaterialProgramDefinitions)
+            programDefinitions.push_back(description);
+    }
+    for (const MaterialDescription& description : programDefinitions)
+    {
+        if (!EmitMaterialProgramAsset(runtime, description, materialData))
+            return false;
+    }
     if (!ExportMaterialProgramManifest(runtime, materialData))
         return false;
     MeshoptimizerTiming::Add(MeshoptimizerTiming::MaterialProcessing, materialStart);
+    return true;
+}
+
+bool ModelV2Builder::BuildDisplayData(Runtime* runtime)
+{
+    using namespace MetaGen::Shared::ClientDB;
+    using DisplayKey = std::tuple<u8, u32, u8, u64>;
+
+    if (!runtime || !ClientDBExtractor::creatureModelDataStorage.IsInitialized() ||
+        !ClientDBExtractor::creatureDisplayInfoStorage.IsInitialized() ||
+        !ClientDBExtractor::itemDisplayInfoStorage.IsInitialized())
+    {
+        NC_LOG_ERROR("[Model V2] display data requires the extracted display ClientDBs");
+        return false;
+    }
+
+    std::unordered_map<u64, DisplayMaterialModelRecipe> recipes;
+    {
+        std::scoped_lock lock(gGeneratedMaterialMutex);
+        recipes = gDisplayMaterialRecipes;
+    }
+
+    struct ResolvedDisplay
+    {
+        DisplayData::Source source = DisplayData::Source::CreatureDisplayInfo;
+        u32 displayID = 0;
+        u8 modelVariant = 0;
+        u64 modelAssetID = FileFormat::INVALID_ASSET_ID;
+        std::map<u32, u64> textureOverrides;
+    };
+
+    std::map<DisplayKey, ResolvedDisplay> displays;
+    std::vector<DisplayMaterialOmission> omissions;
+    u64 conflictingValues = 0;
+
+    auto appendDisplay = [&](DisplayData::Source source, u32 displayID, u8 modelVariant,
+        const DisplayMaterialModelRecipe& recipe, auto&& resolver)
+    {
+        const DisplayKey key{ static_cast<u8>(source), displayID, modelVariant, recipe.modelAssetID };
+        auto displayIt = displays.try_emplace(key, ResolvedDisplay{
+            source, displayID, modelVariant, recipe.modelAssetID, {}
+        }).first;
+        for (const DisplayMaterialSlotRecipe& slot : recipe.slots)
+        {
+            MaterialDescription material = slot.material;
+            DisplayMaterialResolution resolution = resolver(material);
+            if (resolution && !HasCompleteTextureBindings(material))
+                resolution = Omitted(DisplayMaterialOmissionReason::MissingStaticTextureResource,
+                    M2::M2Texture::Type::None);
+            if (!resolution)
+            {
+                omissions.push_back({ source, displayID, modelVariant, recipe.modelAssetID, slot.stableID,
+                    resolution.reason, resolution.textureType });
+                continue;
+            }
+
+            for (u32 textureSlot = 0; textureSlot < material.textureCount; ++textureSlot)
+            {
+                const M2::M2Texture::Type replacementType = material.replacementTypes[textureSlot];
+                if (replacementType == M2::M2Texture::Type::None)
+                    continue;
+
+                const u64 textureAssetID = material.textureAssetIDs[textureSlot];
+                const u32 parameterStableID = static_cast<u32>(replacementType);
+                auto [valueIt, valueInserted] = displayIt->second.textureOverrides.try_emplace(
+                    parameterStableID, textureAssetID);
+                if (!valueInserted && valueIt->second != textureAssetID)
+                {
+                    NC_LOG_ERROR("[Model V2] Display parameter resolves to conflicting textures: display={}, parameter={}",
+                        displayID, parameterStableID);
+                    ++conflictingValues;
+                }
+            }
+        }
+    };
+
+    std::unordered_map<u32, u64> creatureModels;
+    ClientDBExtractor::creatureModelDataStorage.Each([&](u32 modelID, CreatureModelDataRecord& model)
+    {
+        const std::string& modelPath = ClientDBExtractor::creatureModelDataStorage.GetString(model.model);
+        if (!modelPath.empty())
+            creatureModels[modelID] = HashModelV2Path(modelPath);
+        return true;
+    });
+
+    ClientDBExtractor::creatureDisplayInfoStorage.Each([&](u32 displayID, CreatureDisplayInfoRecord& display)
+    {
+        const auto modelIt = creatureModels.find(display.modelID);
+        if (modelIt == creatureModels.end())
+            return true;
+        const auto recipeIt = recipes.find(modelIt->second);
+        if (recipeIt == recipes.end())
+            return true;
+        appendDisplay(DisplayData::Source::CreatureDisplayInfo, displayID, 0, recipeIt->second,
+            [&](MaterialDescription& material) { return ResolveCreatureDisplayMaterial(material, display); });
+        return true;
+    });
+
+    std::unordered_map<u32, std::vector<u64>> itemModels;
+    CascLoader* cascLoader = ServiceLocator::GetCascLoader();
+    for (const auto& [modelResourcesID, fileIDs] : ClientDBExtractor::modelResourcesIDToModelFileDataEntry)
+    {
+        std::vector<u64>& modelAssetIDs = itemModels[modelResourcesID];
+        for (u32 fileID : fileIDs)
+        {
+            if (!cascLoader->InCascAndListFile(fileID))
+                continue;
+            std::filesystem::path modelPath = std::filesystem::path("model") /
+                cascLoader->GetFilePathFromListFileID(fileID);
+            modelPath.replace_extension(FileFormat::Model::FILE_EXTENSION);
+            std::string canonicalPath = modelPath.generic_string();
+            std::transform(canonicalPath.begin(), canonicalPath.end(), canonicalPath.begin(),
+                [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+            modelAssetIDs.push_back(HashString(canonicalPath));
+        }
+    }
+    for (auto& [resourceID, modelAssetIDs] : itemModels)
+    {
+        std::sort(modelAssetIDs.begin(), modelAssetIDs.end());
+        modelAssetIDs.erase(std::unique(modelAssetIDs.begin(), modelAssetIDs.end()), modelAssetIDs.end());
+    }
+
+    std::unordered_map<ItemMaterialLookupKey, u32, ItemMaterialLookupKeyHash> itemMaterialLookup;
+    ClientDBExtractor::itemDisplayModelMaterialResourcesStorage.Each(
+        [&](u32, ItemDisplayInfoModelMaterialResourceRecord& material)
+        {
+            itemMaterialLookup[{ material.displayInfoID, material.modelIndex, material.textureType }] =
+                material.materialResourcesID;
+            return true;
+        });
+
+    ClientDBExtractor::itemDisplayInfoStorage.Each([&](u32 displayID, ItemDisplayInfoRecord& display)
+    {
+        for (u8 modelVariant = 0; modelVariant < display.modelResourcesID.size(); ++modelVariant)
+        {
+            const auto modelsIt = itemModels.find(display.modelResourcesID[modelVariant]);
+            if (modelsIt == itemModels.end())
+                continue;
+            for (u64 modelAssetID : modelsIt->second)
+            {
+                const auto recipeIt = recipes.find(modelAssetID);
+                if (recipeIt == recipes.end())
+                    continue;
+                appendDisplay(DisplayData::Source::ItemDisplayInfo, displayID, modelVariant, recipeIt->second,
+                    [&](MaterialDescription& material)
+                    {
+                        return ResolveItemDisplayMaterial(material, displayID, modelVariant, display, itemMaterialLookup);
+                    });
+            }
+        }
+        return true;
+    });
+
+    if (conflictingValues != 0)
+    {
+        std::ofstream report(runtime->paths.pactRoot / "display_parameter_failure_report.txt",
+            std::ios::out | std::ios::trunc);
+        report << "ConflictingParameterValues=" << conflictingValues << '\n'
+               << "PartialRegistrations=" << displays.size() << '\n'
+               << "OmittedSlotConfigurations=" << omissions.size() << '\n';
+        return false;
+    }
+
+    ClientDB::Data registrationStorage;
+    registrationStorage.Initialize<DisplayData::RegistrationRecord>();
+    registrationStorage.Reserve(static_cast<u32>(displays.size()));
+
+    struct PendingOverride
+    {
+        u32 displayRegistrationID = 0;
+        u32 parameterStableID = 0;
+        u64 textureAssetID = FileFormat::INVALID_ASSET_ID;
+    };
+    std::vector<PendingOverride> overrides;
+    std::array<u32, 2> registrationsBySource = {};
+    std::array<u32, 2> overridesBySource = {};
+    for (const auto& [key, display] : displays)
+    {
+        DisplayData::RegistrationRecord registration;
+        registration.modelAssetID = display.modelAssetID;
+        registration.displayID = display.displayID;
+        registration.source = static_cast<u8>(display.source);
+        registration.modelVariant = display.modelVariant;
+        const u32 registrationID = registrationStorage.Add(registration);
+        ++registrationsBySource[registration.source];
+
+        for (const auto& [parameterStableID, textureAssetID] : display.textureOverrides)
+        {
+            overrides.push_back({ registrationID, parameterStableID, textureAssetID });
+            ++overridesBySource[registration.source];
+        }
+    }
+
+    ClientDB::Data overrideStorage;
+    overrideStorage.Initialize<DisplayData::ParameterOverrideRecord>();
+    overrideStorage.Reserve(static_cast<u32>(overrides.size()));
+    for (const PendingOverride& pending : overrides)
+    {
+        DisplayData::ParameterOverrideRecord row;
+        row.value0 = pending.textureAssetID;
+        row.displayRegistrationID = pending.displayRegistrationID;
+        row.modelParameterStableID = pending.parameterStableID;
+        row.type = static_cast<u8>(FileFormat::Model::ParameterType::Texture2D);
+        overrideStorage.Add(row);
+    }
+
+    auto addStorage = [&](ClientDB::Data& storage, const char* path)
+    {
+        std::shared_ptr<Bytebuffer> buffer = Bytebuffer::BorrowRuntime(storage.GetSerializedSize());
+        if (!storage.Save(buffer))
+            return false;
+        auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, buffer->writtenData);
+        return manifest.AddFile(runtime, path, buffer);
+    };
+    if (!addStorage(registrationStorage, "clientdb/displayregistration.cdb") ||
+        !addStorage(overrideStorage, "clientdb/displayparameter.cdb"))
+        return false;
+
+    std::ofstream report(runtime->paths.pactRoot / "display_parameter_report.txt",
+        std::ios::out | std::ios::trunc);
+    report << "RegistrationRows=" << displays.size() << '\n'
+           << "ParameterOverrideRows=" << overrides.size() << '\n'
+           << "CreatureRegistrations=" << registrationsBySource[0] << '\n'
+           << "ItemRegistrations=" << registrationsBySource[1] << '\n'
+           << "CreatureTextureOverrides=" << overridesBySource[0] << '\n'
+           << "ItemTextureOverrides=" << overridesBySource[1] << '\n'
+           << "OmittedSlotConfigurations=" << omissions.size() << '\n';
+    if (!report)
+        return false;
+
+    NC_LOG_INFO("[Model V2] display data: {} registrations, {} parameter overrides, {} omitted slot configurations",
+        displays.size(), overrides.size(), omissions.size());
     return true;
 }
 
@@ -1837,6 +2526,7 @@ bool ModelV2Builder::ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffe
         const M2::M2Texture& input = *layout.md21.textures.GetElement(rootBuffer, textureIndex);
         source.textures[textureIndex].assetID = textureIndex < textureAssetIDs.size() ? textureAssetIDs[textureIndex] : FileFormat::INVALID_ASSET_ID;
         source.textures[textureIndex].samplerID = static_cast<u16>((input.flags.wrapX ? 1u : 0u) | (input.flags.wrapY ? 2u : 0u));
+        source.textures[textureIndex].replacementType = input.type;
     }
 
     std::vector<u16> vertexLookup(layout.skin.vertices.size);
@@ -1917,7 +2607,7 @@ bool ModelV2Builder::ConvertWMOAndAdd(Runtime* runtime, Wmo::Layout& layout,
             if (assetID == FileFormat::INVALID_ASSET_ID)
                 continue;
             materialTextureIndices[materialIndex][texture] = static_cast<u32>(source.textures.size());
-            source.textures.push_back({ assetID, samplerID });
+            source.textures.push_back({ assetID, samplerID, M2::M2Texture::Type::None });
         }
     }
 

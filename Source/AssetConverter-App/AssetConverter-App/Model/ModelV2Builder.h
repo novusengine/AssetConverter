@@ -52,8 +52,9 @@ public:
     static void ResetMeshoptimizerTimings();
     static MeshoptimizerTimings GetMeshoptimizerTimings();
     static bool FlushPendingMaterials(Runtime* runtime);
+    static bool BuildDisplayData(Runtime* runtime);
 
-    // These paths consume the parsed WoW layouts directly. ComplexModel remains
+    // These paths consume the parsed source layouts directly. ComplexModel remains
     // an independently generated compatibility output and is not an input to V2.
     static bool ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffer>& rootBuffer, std::shared_ptr<Bytebuffer>& skinBuffer,
         M2::Layout& layout, const std::vector<u64>& textureAssetIDs, const std::string& outputPath);
