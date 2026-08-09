@@ -260,6 +260,7 @@ namespace
 
     struct SourceBatch
     {
+        u32 stableID = 0;
         u32 groupID = 0;
         u32 indexStart = 0;
         u32 indexCount = 0;
@@ -1712,7 +1713,7 @@ namespace
                 return false;
             if (IsDisplaySelected(description))
             {
-                displayMaterialSlots.push_back({ batchIndex, description });
+                displayMaterialSlots.push_back({ source.batches[batchIndex].stableID, description });
                 for (u32 textureSlot = 0; textureSlot < description.textureCount; ++textureSlot)
                 {
                     const M2::M2Texture::Type replacementType = description.replacementTypes[textureSlot];
@@ -1732,7 +1733,7 @@ namespace
 
                     data.parameterBindings.push_back({
                         parameterStableID,
-                        batchIndex,
+                        source.batches[batchIndex].stableID,
                         static_cast<u16>(textureSlot),
                         FileFormat::Model::ParameterBindingTarget::TextureSlot,
                         0,
@@ -1740,7 +1741,7 @@ namespace
                     });
                 }
             }
-            data.materialSlots.push_back({ instanceAssetID, HashString(outputPath + "/material_" + std::to_string(batchIndex)), batchIndex, 0 });
+            data.materialSlots.push_back({ instanceAssetID, HashString(outputPath + "/material_" + std::to_string(source.batches[batchIndex].stableID)), source.batches[batchIndex].stableID, 0 });
         }
         std::sort(data.parameters.begin(), data.parameters.end(), [](const auto& left, const auto& right)
         {
@@ -2293,23 +2294,27 @@ bool ModelV2Builder::BuildDisplayData(Runtime* runtime)
         }).first;
         for (const DisplayMaterialSlotRecipe& slot : recipe.slots)
         {
-            MaterialDescription material = slot.material;
-            DisplayMaterialResolution resolution = resolver(material);
-            if (resolution && !HasCompleteTextureBindings(material))
-                resolution = Omitted(DisplayMaterialOmissionReason::MissingStaticTextureResource,
-                    M2::M2Texture::Type::None);
-            if (!resolution)
+            for (u32 textureSlot = 0; textureSlot < slot.material.textureCount; ++textureSlot)
             {
-                omissions.push_back({ source, displayID, modelVariant, recipe.modelAssetID, slot.stableID,
-                    resolution.reason, resolution.textureType });
-                continue;
-            }
-
-            for (u32 textureSlot = 0; textureSlot < material.textureCount; ++textureSlot)
-            {
-                const M2::M2Texture::Type replacementType = material.replacementTypes[textureSlot];
+                const M2::M2Texture::Type replacementType = slot.material.replacementTypes[textureSlot];
                 if (replacementType == M2::M2Texture::Type::None)
                     continue;
+
+                MaterialDescription material = slot.material;
+                for (u32 otherSlot = 0; otherSlot < material.textureCount; ++otherSlot)
+                {
+                    if (otherSlot != textureSlot)
+                        material.replacementTypes[otherSlot] = M2::M2Texture::Type::None;
+                }
+                DisplayMaterialResolution resolution = resolver(material);
+                if (resolution && material.textureAssetIDs[textureSlot] == FileFormat::INVALID_ASSET_ID)
+                    resolution = Omitted(DisplayMaterialOmissionReason::MissingStaticTextureResource, replacementType);
+                if (!resolution)
+                {
+                    omissions.push_back({ source, displayID, modelVariant, recipe.modelAssetID, slot.stableID,
+                        resolution.reason, resolution.textureType });
+                    continue;
+                }
 
                 const u64 textureAssetID = material.textureAssetIDs[textureSlot];
                 const u32 parameterStableID = static_cast<u32>(replacementType);
@@ -2487,6 +2492,21 @@ bool ModelV2Builder::BuildDisplayData(Runtime* runtime)
 bool ModelV2Builder::ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffer>& rootBuffer, std::shared_ptr<Bytebuffer>& skinBuffer,
     M2::Layout& layout, const std::vector<u64>& textureAssetIDs, const std::string& outputPath)
 {
+    auto isConstantZero = [&rootBuffer](const M2::M2Track<i16>& track)
+    {
+        if (track.values.size != 1)
+            return false;
+        const M2::M2Array<i16>& values = *track.values.GetElement(rootBuffer, 0);
+        return values.size == 1 && *values.GetElement(rootBuffer, 0) == 0;
+    };
+
+    std::vector<u8> constantZeroTransparencyTracks(layout.md21.textureWeights.size, 0);
+    for (u32 trackIndex = 0; trackIndex < layout.md21.textureWeights.size; ++trackIndex)
+    {
+        const M2::M2TextureWeight& textureWeight = *layout.md21.textureWeights.GetElement(rootBuffer, trackIndex);
+        constantZeroTransparencyTracks[trackIndex] = isConstantZero(textureWeight.weight);
+    }
+
     const auto sourcePreparationStart = MeshoptimizerTiming::Start();
     SourceModel source;
     source.vertices.resize(layout.md21.vertices.size);
@@ -2541,20 +2561,33 @@ bool ModelV2Builder::ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffe
         source.indices[index] = vertexLookup[lookupIndex];
     }
 
-    source.batches.resize(layout.skin.subMeshes.size);
+    source.batches.reserve(layout.skin.subMeshes.size);
     for (u32 batchIndex = 0; batchIndex < layout.skin.subMeshes.size; ++batchIndex)
     {
         const M2::M2SkinSelection& selection = *layout.skin.subMeshes.GetElement(skinBuffer, batchIndex);
-        SourceBatch& batch = source.batches[batchIndex];
+        SourceBatch batch;
+        batch.stableID = batchIndex;
         batch.groupID = selection.skinSectionID;
         batch.indexStart = selection.indexStart + static_cast<u32>(selection.level) * 65'536u;
         batch.indexCount = selection.indexCount;
+        bool excludeBatch = false;
 
         for (u32 unitIndex = 0; unitIndex < layout.skin.batches.size; ++unitIndex)
         {
             const M2::M2Batch& input = *layout.skin.batches.GetElement(skinBuffer, unitIndex);
             if (input.skinSectionIndex != batchIndex)
                 continue;
+
+            if (input.textureTransparencyLookupID < layout.md21.textureTransparencyLookupList.size)
+            {
+                const u16 transparencyTrackIndex = *layout.md21.textureTransparencyLookupList.GetElement(rootBuffer, input.textureTransparencyLookupID);
+                if (transparencyTrackIndex < constantZeroTransparencyTracks.size() && constantZeroTransparencyTracks[transparencyTrackIndex])
+                {
+                    excludeBatch = true;
+                    break;
+                }
+            }
+
             SourceTextureUnit& unit = batch.textureUnits.emplace_back();
             unit.shaderID = input.shaderID;
             unit.materialIndex = input.materialIndex;
@@ -2569,6 +2602,9 @@ bool ModelV2Builder::ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffe
                     unit.textureIndices.push_back(*layout.md21.textureCombinationList.GetElement(rootBuffer, lookupIndex));
             }
         }
+
+        if (!excludeBatch && !batch.textureUnits.empty())
+            source.batches.push_back(std::move(batch));
     }
 
     MeshoptimizerTiming::Add(MeshoptimizerTiming::SourcePreparation, sourcePreparationStart);
@@ -2651,6 +2687,7 @@ bool ModelV2Builder::ConvertWMOAndAdd(Runtime* runtime, Wmo::Layout& layout,
             if (materialIndex >= source.materials.size())
                 continue;
             SourceBatch& batch = source.batches.emplace_back();
+            batch.stableID = static_cast<u32>(source.batches.size()) - 1u;
             batch.groupID = groupIndex;
             batch.indexStart = indexOffset + input.startIndex;
             batch.indexCount = input.indexCount;
