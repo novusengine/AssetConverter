@@ -64,7 +64,10 @@ void MapObjectExtractor::Process()
                 if (!buffer->GetU32(chunkToken))
                     continue;
 
-                if (chunkToken != 'MOHD')
+                // WMO root chunk token; chunk IDs are stored byte-reversed on disk, so the
+                // little-endian read matches the characters packed high byte first
+                constexpr u32 tokenMOHD = ('M' << 24) | ('O' << 16) | ('H' << 8) | 'D';
+                if (chunkToken != tokenMOHD)
                     continue;
             }
 
@@ -167,7 +170,7 @@ void MapObjectExtractor::Process()
                         Model::MapObject::Decoration& decoration = mapObject.decorations[i];
 
                         u32 decorationFileID = static_cast<u32>(decoration.nameID);
-                        if (decorationFileID == std::numeric_limits<u64>().max())
+                        if (decorationFileID == std::numeric_limits<u32>::max())
                             continue;
 
                         const std::string& cascFilePath = cascLoader->GetFilePathFromListFileID(decorationFileID);
