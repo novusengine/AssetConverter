@@ -25,7 +25,7 @@ struct ModelV2AllocationRecord
 
 // Process-local metadata published only after a Model V2 payload has been
 // validated, serialized, and accepted by PACT. Map extraction consumes this
-// instead of reopening the temporary semantic sidecar.
+// instead of reopening a serialized model asset.
 class ModelV2AllocationRegistry
 {
 public:

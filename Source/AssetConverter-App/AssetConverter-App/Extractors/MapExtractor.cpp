@@ -16,7 +16,6 @@
 #include <FileFormat/Novus/ClientDB/ClientDB.h>
 #include <FileFormat/Novus/Map/Map.h>
 #include <FileFormat/Novus/Map/MapChunk.h>
-#include <FileFormat/Novus/Model/ComplexModel.h>
 #include <FileFormat/Novus/Model/Model.h>
 #include <FileFormat/Warcraft/ADT/Adt.h>
 #include <FileFormat/Warcraft/Parsers/WdtParser.h>
@@ -286,19 +285,11 @@ void MapExtractor::Process(bool extractMapAssets, bool generateNavMesh)
 
             u32 placementFileID = static_cast<u32>(placement.nameHash);
             const std::string& filePath = cascLoader->GetFilePathFromListFileID(placementFileID);
-            std::filesystem::path wmoPath = std::filesystem::path("model") / std::filesystem::path(filePath).replace_extension(Model::FILE_EXTENSION);
-            wmoPath.make_preferred();
-            std::string wmoPathStr = wmoPath.string();
-            std::transform(wmoPathStr.begin(), wmoPathStr.end(), wmoPathStr.begin(), ::tolower);
-            std::replace(wmoPathStr.begin(), wmoPathStr.end(), '\\', '/');
-
-            u64 nameHash = XXHash64::hash(wmoPathStr.c_str(), wmoPathStr.size(), 0);
-            placement.nameHash = nameHash;
-
             std::filesystem::path modelV2Path = std::filesystem::path("model") / std::filesystem::path(filePath).replace_extension(FileFormat::Model::FILE_EXTENSION);
             std::string modelV2PathStr = modelV2Path.generic_string();
             std::transform(modelV2PathStr.begin(), modelV2PathStr.end(), modelV2PathStr.begin(), ::tolower);
             globalModelV2AssetID = XXHash64::hash(modelV2PathStr.c_str(), modelV2PathStr.size(), 0);
+            placement.nameHash = globalModelV2AssetID;
         }
         else
         {
@@ -481,15 +472,11 @@ void MapExtractor::Process(bool extractMapAssets, bool generateNavMesh)
                             else
                             {
                                 const std::string& sourceModelPath = cascLoader->GetFilePathFromListFileID(placementFileID);
-                                std::filesystem::path semanticModelPath = std::filesystem::path("model") / std::filesystem::path(sourceModelPath).replace_extension(Model::FILE_EXTENSION);
-                                std::string semanticModelPathStr = semanticModelPath.generic_string();
-                                std::transform(semanticModelPathStr.begin(), semanticModelPathStr.end(), semanticModelPathStr.begin(), ::tolower);
-                                placementInfo.nameHash = XXHash64::hash(semanticModelPathStr.c_str(), semanticModelPathStr.size(), 0);
-
                                 std::filesystem::path modelV2Path = std::filesystem::path("model") / std::filesystem::path(sourceModelPath).replace_extension(FileFormat::Model::FILE_EXTENSION);
                                 std::string modelV2PathStr = modelV2Path.generic_string();
                                 std::transform(modelV2PathStr.begin(), modelV2PathStr.end(), modelV2PathStr.begin(), ::tolower);
                                 modelV2AssetID = XXHash64::hash(modelV2PathStr.c_str(), modelV2PathStr.size(), 0);
+                                placementInfo.nameHash = modelV2AssetID;
                             }
 
                             chunkModelAllocation.AddRootPlacement(modelV2AssetID, placementInfo.doodadSet);

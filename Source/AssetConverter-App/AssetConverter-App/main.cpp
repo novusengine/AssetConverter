@@ -3,7 +3,7 @@
 #include "Extractors/ClientDBExtractor.h"
 #include "Extractors/MapExtractor.h"
 #include "Extractors/MapObjectExtractor.h"
-#include "Extractors/ComplexModelExtractor.h"
+#include "Extractors/ModelExtractor.h"
 #include "Extractors/TextureExtractor.h"
 #include "Model/ModelV2Allocation.h"
 #include "Model/ModelV2Builder.h"
@@ -126,7 +126,7 @@ i32 main()
     bool isMapEnabled = false;
     bool isNavMeshEnabled = false;
     bool isMapObjectEnabled = false;
-    bool isComplexModelEnabled = false;
+    bool isModelEnabled = false;
     bool isTextureEnabled = false;
     bool rebuildPact = false;
 
@@ -149,7 +149,7 @@ i32 main()
 
         // Setup Json
         {
-            static const std::string CONFIG_VERSION = "0.6";
+            static const std::string CONFIG_VERSION = "0.7";
             static const std::string CONFIG_NAME = "AssetConverterConfig.json";
 
             fs::path configPath = runtime->paths.executable / CONFIG_NAME;
@@ -181,10 +181,10 @@ i32 main()
             isMapEnabled = runtime->json["Extraction"]["Map"]["Enabled"];
             isNavMeshEnabled = runtime->json["Extraction"]["NavMesh"]["Enabled"];
             isMapObjectEnabled = runtime->json["Extraction"]["MapObject"]["Enabled"];
-            isComplexModelEnabled = runtime->json["Extraction"]["ComplexModel"]["Enabled"];
+            isModelEnabled = runtime->json["Extraction"]["Model"]["Enabled"];
             isTextureEnabled = runtime->json["Extraction"]["Texture"]["Enabled"];
             rebuildPact = isExtractingEnabled &&
-                (isDB2Enabled || isMapEnabled || isMapObjectEnabled || isComplexModelEnabled || isTextureEnabled);
+                (isDB2Enabled || isMapEnabled || isMapObjectEnabled || isModelEnabled || isTextureEnabled);
         }
 
         if (!rebuildPact && isExtractingEnabled && isNavMeshEnabled)
@@ -258,7 +258,7 @@ i32 main()
                         }
                     }
 
-                    // Map Object / Complex Model
+                    // Models
                     {
                         ModelV2AllocationRegistry::Reset();
 
@@ -269,14 +269,14 @@ i32 main()
                             NC_LOG_INFO("[AssetConverter] MapObject Extractor Finished\n");
                         }
 
-                        if (isComplexModelEnabled)
+                        if (isModelEnabled)
                         {
-                            NC_LOG_INFO("[AssetConverter] Processing ComplexModel Extractor...");
-                            ComplexModelExtractor::Process();
-                            NC_LOG_INFO("[AssetConverter] ComplexModel Extractor Finished\n");
+                            NC_LOG_INFO("[AssetConverter] Processing Model Extractor...");
+                            ModelExtractor::Process();
+                            NC_LOG_INFO("[AssetConverter] Model Extractor Finished\n");
                         }
 
-                        if (isDB2Enabled && isComplexModelEnabled)
+                        if (isDB2Enabled && isModelEnabled)
                         {
                             NC_LOG_INFO("[AssetConverter] Processing display material assignments...");
                             if (!ModelV2Builder::BuildDisplayData(runtime))

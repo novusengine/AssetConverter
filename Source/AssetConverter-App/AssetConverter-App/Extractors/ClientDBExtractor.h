@@ -25,7 +25,6 @@ private:
     static bool ExtractLiquidMaterialData(const std::string& name, bool writePact);
     static bool ExtractCinematicCamera(const std::string& name);
     static bool ExtractCinematicSequence(const std::string& name);
-    static bool ExtractAnimationData(const std::string& name);
     static bool ExtractCreatureDisplayInfo(const std::string& name);
     static bool ExtractCreatureDisplayInfoExtra(const std::string& name);
     static bool ExtractCreatureModelData(const std::string& name);
@@ -46,7 +45,6 @@ public:
     static ClientDB::Data liquidMaterialStorage;
     static ClientDB::Data cinematicCameraStorage;
     static ClientDB::Data cinematicSequenceStorage;
-    static ClientDB::Data animationDataStorage;
     static ClientDB::Data creatureModelDataStorage;
     static ClientDB::Data creatureDisplayInfoStorage;
     static ClientDB::Data creatureDisplayInfoExtraStorage;

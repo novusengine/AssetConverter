@@ -5,6 +5,7 @@
 #include "AssetConverter-App/Extractors/ClientDBExtractor.h"
 #include "AssetConverter-App/Casc/CascLoader.h"
 #include "AssetConverter-App/Runtime.h"
+#include "AssetConverter-App/Util/JoltStream.h"
 #include "AssetConverter-App/Util/ServiceLocator.h"
 
 #include <Base/Memory/Bytebuffer.h>
@@ -17,6 +18,9 @@
 #include <FileFormat/Warcraft/M2/M2.h>
 #include <FileFormat/Warcraft/WMO/Wmo.h>
 #include <MetaGen/Shared/ClientDB/ClientDB.h>
+
+#include <Jolt/Jolt.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 
 #include <meshoptimizer.h>
 #include <xxhash/xxhash64.h>
@@ -292,6 +296,10 @@ namespace
         std::vector<SourceBatch> batches;
         std::vector<SourceInstanceSet> instanceSets;
         std::vector<SourceInstance> instances;
+        std::vector<vec3> collisionVertices;
+        std::vector<u32> collisionIndices;
+        FileFormat::Model::Bounds assetBounds;
+        bool hasAssetBounds = false;
         bool isWMO = false;
     };
 
@@ -608,6 +616,70 @@ namespace
         }
         result.sphereRadius = std::sqrt(radiusSquared);
         return result;
+    }
+
+    bool CookPhysicsData(const SourceModel& source, std::vector<u8>& output)
+    {
+        output.clear();
+        if (source.collisionVertices.empty() && source.collisionIndices.empty())
+            return true;
+        if (source.collisionVertices.empty() || source.collisionIndices.empty() || source.collisionIndices.size() % 3 != 0)
+            return false;
+
+        JPH::VertexList vertices;
+        vertices.reserve(source.collisionVertices.size());
+        for (const vec3& position : source.collisionVertices)
+            vertices.push_back({ position.x, position.y, position.z });
+
+        JPH::IndexedTriangleList triangles;
+        triangles.reserve(source.collisionIndices.size() / 3);
+        for (size_t offset = 0; offset < source.collisionIndices.size(); offset += 3)
+        {
+            const u32 indexA = source.collisionIndices[offset + 2];
+            const u32 indexB = source.collisionIndices[offset + 1];
+            const u32 indexC = source.collisionIndices[offset];
+            if (indexA >= vertices.size() || indexB >= vertices.size() || indexC >= vertices.size())
+                return false;
+            triangles.push_back({ indexA, indexB, indexC });
+        }
+
+        JPH::MeshShapeSettings shapeSettings(vertices, triangles);
+        JPH::ShapeSettings::ShapeResult shapeResult = shapeSettings.Create();
+        if (!shapeResult.IsValid())
+            return false;
+
+        JPH::Shape::ShapeToIDMap shapeMap;
+        JPH::Shape::MaterialToIDMap materialMap;
+        std::shared_ptr<Bytebuffer> physicsBuffer = Bytebuffer::Borrow<16777216>();
+        JoltStream stream(physicsBuffer);
+        shapeResult.Get()->SaveWithChildren(stream, shapeMap, materialMap);
+        if (stream.IsFailed() || physicsBuffer->writtenData == 0)
+            return false;
+
+        output.resize(physicsBuffer->writtenData);
+        std::memcpy(output.data(), physicsBuffer->GetDataPointer(), physicsBuffer->writtenData);
+        return true;
+    }
+
+    bool AppendWMOLeafFaces(const Wmo::WMOGroup& group, i32 nodeIndex, std::vector<u16>& faces, std::vector<u8>& visited)
+    {
+        if (nodeIndex == -1)
+            return true;
+        if (nodeIndex < 0 || static_cast<size_t>(nodeIndex) >= group.mobn.data.size() || visited[nodeIndex])
+            return false;
+
+        visited[nodeIndex] = 1;
+        const Wmo::MOBN::BspNode& node = group.mobn.data[nodeIndex];
+        if ((node.flags & 0x4u) != 0)
+        {
+            const u64 faceEnd = static_cast<u64>(node.faceStart) + node.nFaces;
+            if (faceEnd > group.mobr.data.size())
+                return false;
+            faces.insert(faces.end(), group.mobr.data.begin() + node.faceStart, group.mobr.data.begin() + faceEnd);
+            return true;
+        }
+
+        return AppendWMOLeafFaces(group, node.negChild, faces, visited) && AppendWMOLeafFaces(group, node.posChild, faces, visited);
     }
 
     bool BuildBaseLOD(const SourceModel& source, LODSource& output)
@@ -1484,8 +1556,7 @@ namespace
                 glm::all(glm::greaterThanEqual(bounds.extents, vec3(0.0f)));
         };
 
-        if (asset.collisionAssetID != FileFormat::INVALID_ASSET_ID || !finiteBounds(asset.bounds) ||
-            data.materialSlots.empty() || asset.geometryGroupCount == 0)
+        if (!finiteBounds(asset.bounds) || data.materialSlots.empty() || asset.geometryGroupCount == 0)
             return false;
 
         for (const FileFormat::Model::PackedPosition& position : data.positions)
@@ -1835,8 +1906,12 @@ namespace
         }
         MeshoptimizerTiming::Add(MeshoptimizerTiming::GeometryCooking, geometryStart);
 
-        asset.bounds = mesh.bounds;
-        asset.collisionAssetID = FileFormat::INVALID_ASSET_ID;
+        asset.bounds = source.hasAssetBounds ? source.assetBounds : mesh.bounds;
+        if (!CookPhysicsData(source, data.physicsData))
+        {
+            NC_LOG_WARNING("[Model Extractor] Failed to cook embedded physics for {0}", outputPath);
+            return false;
+        }
         if (!ValidateModel(asset, data))
             return false;
 
@@ -2525,6 +2600,36 @@ bool ModelV2Builder::ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffe
         std::copy(std::begin(input.boneWeights), std::end(input.boneWeights), vertex.jointWeights.begin());
     }
 
+    source.assetBounds = CalculateBounds(source.vertices);
+    if (!source.vertices.empty())
+    {
+        vec3 minimum = source.assetBounds.center - source.assetBounds.extents;
+        vec3 maximum = source.assetBounds.center + source.assetBounds.extents;
+        for (u32 sequenceIndex = 0; sequenceIndex < layout.md21.sequences.size; ++sequenceIndex)
+        {
+            const M2::M2Sequence& sequence = *layout.md21.sequences.GetElement(rootBuffer, sequenceIndex);
+            const vec3 convertedA = CoordinateSpaces::ModelPosToNovus(sequence.bounds.aabb.min);
+            const vec3 convertedB = CoordinateSpaces::ModelPosToNovus(sequence.bounds.aabb.max);
+            const vec3 sequenceMinimum = glm::min(convertedA, convertedB);
+            const vec3 sequenceMaximum = glm::max(convertedA, convertedB);
+            if (!glm::any(glm::greaterThan(sequenceMaximum - sequenceMinimum, vec3(0.0f))))
+                continue;
+            minimum = glm::min(minimum, sequenceMinimum);
+            maximum = glm::max(maximum, sequenceMaximum);
+        }
+        source.assetBounds.center = (minimum + maximum) * 0.5f;
+        source.assetBounds.extents = maximum - source.assetBounds.center;
+        source.assetBounds.sphereRadius = glm::length(source.assetBounds.extents);
+        source.hasAssetBounds = true;
+    }
+
+    source.collisionVertices.resize(layout.md21.collisionVertices.size);
+    for (u32 vertexIndex = 0; vertexIndex < layout.md21.collisionVertices.size; ++vertexIndex)
+        source.collisionVertices[vertexIndex] = CoordinateSpaces::ModelPosToNovus(*layout.md21.collisionVertices.GetElement(rootBuffer, vertexIndex));
+    source.collisionIndices.resize(layout.md21.collisionIndices.size);
+    for (u32 index = 0; index < layout.md21.collisionIndices.size; ++index)
+        source.collisionIndices[index] = *layout.md21.collisionIndices.GetElement(rootBuffer, index);
+
     source.materials.resize(layout.md21.materials.size);
     for (u32 materialIndex = 0; materialIndex < layout.md21.materials.size; ++materialIndex)
     {
@@ -2678,6 +2783,37 @@ bool ModelV2Builder::ConvertWMOAndAdd(Runtime* runtime, Wmo::Layout& layout,
             if (localIndex >= numVertices)
                 return false;
             source.indices.push_back(vertexOffset + localIndex);
+        }
+
+        if (!group.mobn.data.empty())
+        {
+            std::vector<u16> collisionFaces;
+            std::vector<u8> visited(group.mobn.data.size(), 0);
+            if (!AppendWMOLeafFaces(group, 0, collisionFaces, visited))
+                return false;
+
+            std::unordered_map<u16, u32> collisionVertexRemap;
+            collisionVertexRemap.reserve(numVertices);
+            for (u16 triangleIndex : collisionFaces)
+            {
+                const u64 sourceIndexOffset = static_cast<u64>(triangleIndex) * 3u;
+                if (triangleIndex >= group.mopy.data.size() || sourceIndexOffset + 2u >= group.movi.data.size())
+                    return false;
+                if (group.mopy.data[triangleIndex].flags.Detail)
+                    continue;
+
+                for (u32 corner = 0; corner < 3; ++corner)
+                {
+                    const u16 localVertexIndex = group.movi.data[sourceIndexOffset + corner];
+                    if (localVertexIndex >= group.movt.data.size())
+                        return false;
+
+                    auto [itr, inserted] = collisionVertexRemap.try_emplace(localVertexIndex, static_cast<u32>(source.collisionVertices.size()));
+                    if (inserted)
+                        source.collisionVertices.push_back(CoordinateSpaces::ModelPosToNovus(group.movt.data[localVertexIndex].position));
+                    source.collisionIndices.push_back(itr->second);
+                }
+            }
         }
 
         for (const Wmo::MOBA::RenderBatch& input : group.moba.data)

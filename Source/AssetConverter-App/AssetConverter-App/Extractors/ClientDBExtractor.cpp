@@ -14,7 +14,7 @@
 #include <FileFormat/Warcraft/DB2/Wdc3.h>
 #include <FileFormat/Warcraft/Parsers/Wdc3Parser.h>
 #include <FileFormat/Novus/ClientDB/ClientDB.h>
-#include <FileFormat/Novus/Model/ComplexModel.h>
+#include <FileFormat/Novus/Model/Model.h>
 
 #include <MetaGen/Shared/ClientDB/ClientDB.h>
 
@@ -33,7 +33,6 @@ std::vector<ClientDBExtractor::ExtractionEntry> ClientDBExtractor::_extractionEn
     { "LiquidMaterial",		                "A collection of liquid materials",		            ClientDBExtractor::ExtractLiquidMaterial },
     { "CinematicCamera",	                "A collection of cinematic cameras",	            ClientDBExtractor::ExtractCinematicCamera },
     { "CinematicSequences",	                "A collection of cinematic sequences",	            ClientDBExtractor::ExtractCinematicSequence },
-    { "AnimationData",	                    "A collection of Animation Data",	                ClientDBExtractor::ExtractAnimationData },
     { "CreatureModelData",                  "A collection of Creature Model Data",              ClientDBExtractor::ExtractCreatureModelData },
     { "CreatureDisplayInfo",                "A collection of Creature Display Info Data",	    ClientDBExtractor::ExtractCreatureDisplayInfo },
     { "CreatureDisplayInfoExtra",           "A collection of Creature Display Info Extra Data", ClientDBExtractor::ExtractCreatureDisplayInfoExtra },
@@ -54,7 +53,6 @@ ClientDB::Data ClientDBExtractor::liquidTypeStorage;
 ClientDB::Data ClientDBExtractor::liquidMaterialStorage;
 ClientDB::Data ClientDBExtractor::cinematicCameraStorage;
 ClientDB::Data ClientDBExtractor::cinematicSequenceStorage;
-ClientDB::Data ClientDBExtractor::animationDataStorage;
 ClientDB::Data ClientDBExtractor::creatureModelDataStorage;
 ClientDB::Data ClientDBExtractor::creatureDisplayInfoStorage;
 ClientDB::Data ClientDBExtractor::creatureDisplayInfoExtraStorage;
@@ -105,12 +103,12 @@ void FixPathExtension(std::string& path)
 
     if (StringUtils::EndsWith(path, ".mdx"))
     {
-        path = "model/" + path.substr(0, path.length() - 4) + Model::FILE_EXTENSION;
+        path = "model/" + path.substr(0, path.length() - 4) + FileFormat::Model::FILE_EXTENSION;
         std::transform(path.begin(), path.end(), path.begin(), ::tolower);
     }
     else if (StringUtils::EndsWith(path, ".m2"))
     {
-        path = "model/" + path.substr(0, path.length() - 3) + Model::FILE_EXTENSION;
+        path = "model/" + path.substr(0, path.length() - 3) + FileFormat::Model::FILE_EXTENSION;
         std::transform(path.begin(), path.end(), path.begin(), ::tolower);
     }
     else if (StringUtils::EndsWith(path, ".blp"))
@@ -219,7 +217,7 @@ bool ClientDBExtractor::ExtractModelFileData(const std::string& name)
         if (cascLoader->InCascAndListFile(modelFileID))
         {
             const std::string& fileStr = cascLoader->GetFilePathFromListFileID(modelFileID);
-            filePath = fs::path("model") / fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
+            filePath = fs::path("model") / fs::path(fileStr).replace_extension(FileFormat::Model::FILE_EXTENSION);
         }
 
         modelFileData.model = modelFileDataStorage.AddString(filePath.generic_string());
@@ -642,7 +640,7 @@ bool ClientDBExtractor::ExtractCinematicCamera(const std::string& name)
         if (cascLoader->InCascAndListFile(fileID))
         {
             const std::string& fileStr = cascLoader->GetFilePathFromListFileID(fileID);
-            filePath = fs::path("model") / fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
+            filePath = fs::path("model") / fs::path(fileStr).replace_extension(FileFormat::Model::FILE_EXTENSION);
         }
         cinematicCamera.model = cinematicCameraStorage.AddString(filePath.generic_string());
 
@@ -716,60 +714,6 @@ bool ClientDBExtractor::ExtractCinematicSequence(const std::string& name)
     return manifest.AddFile(runtime, pactPath, storageBuffer);
 }
 
-bool ClientDBExtractor::ExtractAnimationData(const std::string& name)
-{
-    CascLoader* cascLoader = ServiceLocator::GetCascLoader();
-
-    DB2::WDC3::Layout layout = { };
-    DB2::WDC3::Parser db2Parser = { };
-
-    std::shared_ptr<Bytebuffer> buffer = cascLoader->GetFileByListFilePath(GetFilePathForDB2ByName(name));
-    if (!buffer || !db2Parser.TryParse(buffer, layout))
-        return false;
-
-    const DB2::WDC3::Layout::Header& header = layout.header;
-
-    animationDataStorage.Initialize<MetaGen::Shared::ClientDB::AnimationDataRecord>();
-    animationDataStorage.Reserve(header.recordCount);
-
-    for (u32 db2RecordIndex = 0; db2RecordIndex < header.recordCount; db2RecordIndex++)
-    {
-        u32 sectionID = 0;
-        u32 recordID = 0;
-        u8* recordData = nullptr;
-
-        if (!db2Parser.TryReadRecord(layout, db2RecordIndex, sectionID, recordID, recordData))
-            continue;
-
-        MetaGen::Shared::ClientDB::AnimationDataRecord animationData;
-        animationData.fallback = db2Parser.GetField<u16>(layout, sectionID, recordID, recordData, 0);
-        animationData.behaviorTier = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 1);
-        animationData.behaviorID = db2Parser.GetField<u32>(layout, sectionID, recordID, recordData, 2);
-
-        const u32* flags = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 3);
-        animationData.flags = flags[0] | static_cast<u64>(flags[1]) << 32;
-
-        animationDataStorage.Replace(recordID, animationData);
-    }
-
-    RepopulateFromCopyTable<MetaGen::Shared::ClientDB::AnimationDataRecord>(layout, animationDataStorage);
-
-    Runtime* runtime = ServiceLocator::GetRuntime();
-
-    size_t size = animationDataStorage.GetSerializedSize();
-    std::shared_ptr<Bytebuffer> storageBuffer = Bytebuffer::BorrowRuntime(size);
-    if (!animationDataStorage.Save(storageBuffer))
-        return false;
-
-    fs::path path = fs::path("clientdb") / name;
-    path.replace_extension(ClientDB::FILE_EXTENSION);
-
-    std::string pactPath = path.generic_string();
-    StringUtils::ToLower(pactPath);
-    auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, storageBuffer->writtenData);
-    return manifest.AddFile(runtime, pactPath, storageBuffer);
-}
-
 bool ClientDBExtractor::ExtractCreatureModelData(const std::string& name)
 {
     CascLoader* cascLoader = ServiceLocator::GetCascLoader();
@@ -820,7 +764,7 @@ bool ClientDBExtractor::ExtractCreatureModelData(const std::string& name)
         if (cascLoader->InCascAndListFile(fileID))
         {
             const std::string& fileStr = cascLoader->GetFilePathFromListFileID(fileID);
-            filePath = fs::path("model") / fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
+            filePath = fs::path("model") / fs::path(fileStr).replace_extension(FileFormat::Model::FILE_EXTENSION);
         }
 
         creatureModelData.model = creatureModelDataStorage.AddString(filePath.generic_string());
@@ -1480,7 +1424,7 @@ bool ClientDBExtractor::ExtractLightSkybox(const std::string& name)
                 if (cascLoader->InCascAndListFile(fileID))
                 {
                     const std::string& fileStr = cascLoader->GetFilePathFromListFileID(fileID);
-                    filePath = fs::path("model") / fs::path(fileStr).replace_extension(Model::FILE_EXTENSION);
+                    filePath = fs::path("model") / fs::path(fileStr).replace_extension(FileFormat::Model::FILE_EXTENSION);
                 }
             }
 

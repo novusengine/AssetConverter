@@ -1,7 +1,6 @@
 #include "MapObjectExtractor.h"
 #include "AssetConverter-App/Runtime.h"
 #include "AssetConverter-App/Casc/CascLoader.h"
-#include "AssetConverter-App/Util/JoltStream.h"
 #include "AssetConverter-App/Util/ServiceLocator.h"
 #include "AssetConverter-App/Model/ModelV2Builder.h"
 
@@ -9,17 +8,10 @@
 #include <Base/Util/DebugHandler.h>
 #include <Base/Util/StringUtils.h>
 
-#include <FileFormat/Novus/Model/ComplexModel.h>
-#include <FileFormat/Novus/Model/MapObject.h>
 #include <FileFormat/Novus/Model/Model.h>
 #include <FileFormat/Shared.h>
 #include <FileFormat/Warcraft/WMO/Wmo.h>
 #include <FileFormat/Warcraft/Parsers/WmoParser.h>
-
-#include <Jolt/Jolt.h>
-#include <Jolt/Geometry/Triangle.h>
-#include <Jolt/Physics/Body/BodyCreationSettings.h>
-#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 
 #include <xxhash/xxhash64.h>
 
@@ -42,8 +34,7 @@ void MapObjectExtractor::Process()
     public:
         u32 fileID = 0;
         std::string fileName;
-        std::string path;
-        std::string modelV2Path;
+        std::string outputPath;
     };
 
     u32 numFiles = static_cast<u32>(wmoFileIDs.size());
@@ -78,15 +69,12 @@ void MapObjectExtractor::Process()
             std::transform(pathStr.begin(), pathStr.end(), pathStr.begin(), ::tolower);
 
             fs::path outputPath = fs::path("model") / pathStr;
-            outputPath.replace_extension(Model::FILE_EXTENSION);
+            outputPath.replace_extension(FileFormat::Model::FILE_EXTENSION);
 
             FileListEntry fileListEntry;
             fileListEntry.fileID = wmoFileID;
             fileListEntry.fileName = outputPath.filename().string();
-            fileListEntry.path = outputPath.generic_string();
-
-            outputPath.replace_extension(FileFormat::Model::FILE_EXTENSION);
-            fileListEntry.modelV2Path = outputPath.generic_string();
+            fileListEntry.outputPath = outputPath.generic_string();
 
             fileListQueue.enqueue(fileListEntry);
         }
@@ -97,9 +85,7 @@ void MapObjectExtractor::Process()
 
     std::mutex printMutex;
     std::atomic<u64> modelV2Nanoseconds = 0;
-    std::atomic<u64> semanticNanoseconds = 0;
     std::atomic<u32> modelV2Succeeded = 0;
-    std::atomic<u32> semanticSucceeded = 0;
     u32 numProcessedFiles = 0;
     u16 progressFlags = 0;
 
@@ -108,8 +94,7 @@ void MapObjectExtractor::Process()
     ModelV2Builder::ResetMeshoptimizerTimings();
     const auto extractorWallStart = std::chrono::steady_clock::now();
 
-    enki::TaskSet convertWMOTask(numRootFiles, [&runtime, &cascLoader, &fileListQueue, &numProcessedFiles, &progressFlags, &printMutex,
-        &modelV2Nanoseconds, &semanticNanoseconds, &modelV2Succeeded, &semanticSucceeded, numRootFiles](enki::TaskSetPartition range, uint32_t threadNum)
+    enki::TaskSet convertWMOTask(numRootFiles, [&runtime, &cascLoader, &fileListQueue, &numProcessedFiles, &progressFlags, &printMutex, &modelV2Nanoseconds, &modelV2Succeeded, numRootFiles](enki::TaskSetPartition range, uint32_t threadNum)
     {
         Wmo::Parser wmoParser = { };
         std::shared_ptr<Bytebuffer> buffer;
@@ -178,8 +163,7 @@ void MapObjectExtractor::Process()
                 std::transform(modelName.begin(), modelName.end(), modelName.begin(), ::tolower);
                 modelV2DecorationAssetIDs[decorationIndex] = XXHash64::hash(modelName.c_str(), modelName.length(), 0);
             }
-            const bool modelV2Extracted = ModelV2Builder::ConvertWMOAndAdd(runtime, wmo,
-                modelV2MaterialTextureAssetIDs, modelV2DecorationAssetIDs, fileListEntry.modelV2Path);
+            const bool modelV2Extracted = ModelV2Builder::ConvertWMOAndAdd(runtime, wmo, modelV2MaterialTextureAssetIDs, modelV2DecorationAssetIDs, fileListEntry.outputPath);
             modelV2Nanoseconds.fetch_add(static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - modelV2Start).count()), std::memory_order_relaxed);
             if (modelV2Extracted)
@@ -187,129 +171,7 @@ void MapObjectExtractor::Process()
             else
                 NC_LOG_WARNING("[MapObject Extractor] Failed to extract Model V2 {0}", fileListEntry.fileName);
 
-            const auto semanticStart = std::chrono::steady_clock::now();
-            Model::MapObject mapObject = { };
-            if (!Model::MapObject::FromWMO(wmo, mapObject))
-                continue;
-
-            Model::ComplexModel cmodel;
-            if (!Model::ComplexModel::FromMapObject(mapObject, cmodel))
-                continue;
-
-            // if build physics shapes
             {
-                u32 numCollisionVertices = static_cast<u32>(cmodel.collisionVertexPositions.size());
-                u32 numCollisionIndices = static_cast<u32>(cmodel.collisionIndices.size());
-                u32 indexRemainder = numCollisionIndices % 3;
-
-                if (numCollisionVertices > 0 && numCollisionIndices > 0 && indexRemainder == 0)
-                {
-                    u32 numTriangles = numCollisionIndices / 3;
-
-                    JPH::VertexList vertexList;
-                    vertexList.reserve(numCollisionVertices);
-
-                    JPH::IndexedTriangleList triangleList;
-                    triangleList.reserve(numTriangles);
-
-                    for (u32 i = 0; i < numCollisionVertices; i++)
-                    {
-                        const vec3& vertexPos = cmodel.collisionVertexPositions[i];
-                        vertexList.push_back({ vertexPos.x, vertexPos.y, vertexPos.z });
-                    }
-
-                    for (u32 i = 0; i < numTriangles; i++)
-                    {
-                        u32 offset = i * 3;
-
-                        u32 indexA = cmodel.collisionIndices[offset + 2];
-                        u32 indexB = cmodel.collisionIndices[offset + 1];
-                        u32 indexC = cmodel.collisionIndices[offset + 0];
-
-                        triangleList.push_back({ indexA, indexB, indexC });
-                    }
-
-                    JPH::MeshShapeSettings shapeSetting(vertexList, triangleList);
-                    JPH::ShapeSettings::ShapeResult shapeResult = shapeSetting.Create();
-                    JPH::ShapeRefC shape = shapeResult.Get();
-
-                    JPH::Shape::ShapeToIDMap shapeMap;
-                    JPH::Shape::MaterialToIDMap materialMap;
-
-                    std::shared_ptr<Bytebuffer> joltChunkBuffer = Bytebuffer::Borrow<16777216>();
-                    JoltStream joltStream(joltChunkBuffer);
-
-                    shape->SaveWithChildren(joltStream, shapeMap, materialMap);
-
-                    if (!joltStream.IsFailed() && joltChunkBuffer->writtenData > 0)
-                    {
-                        cmodel.physicsData.resize(joltChunkBuffer->writtenData);
-                        memcpy(&cmodel.physicsData[0], joltChunkBuffer->GetDataPointer(), joltChunkBuffer->writtenData);
-                    }
-                }
-            }
-
-            // WMO sidecars retain only bounds and the cooked physics blob. Geometry,
-            // materials, textures, and embedded decorations are owned by Model V2.
-            cmodel.vertices.clear();
-            cmodel.textures.clear();
-            cmodel.materials.clear();
-            cmodel.textureTransforms.clear();
-            cmodel.textureIndexLookupTable.clear();
-            cmodel.textureUnitLookupTable.clear();
-            cmodel.textureTransparencyLookupTable.clear();
-            cmodel.textureTransformLookupTable.clear();
-            cmodel.textureCombinerCombos.clear();
-            cmodel.collisionVertexPositions.clear();
-            cmodel.collisionIndices.clear();
-            cmodel.collisionNormals.clear();
-            cmodel.cameras.clear();
-            cmodel.decorationSets.clear();
-            cmodel.decorations.clear();
-            cmodel.modelData = {};
-            constexpr size_t MAX_SERIALIZED_MODEL_SIZE = 64 * 1024 * 1024;
-            const size_t serializedSize = cmodel.GetSerializedSize();
-            bool serialized = false;
-
-            if (serializedSize <= MAX_SERIALIZED_MODEL_SIZE)
-            {
-                if (!buffer || buffer->size < serializedSize)
-                    buffer = Bytebuffer::BorrowRuntime(serializedSize);
-                else
-                    buffer->Reset();
-
-                serialized = cmodel.Save(buffer);
-                if (serialized && buffer->writtenData != serializedSize)
-                {
-                    NC_LOG_ERROR("[MapObject Extractor] Serialized size mismatch for {0} (Expected: {1}, Actual: {2})", fileListEntry.fileName, serializedSize, buffer->writtenData);
-                    serialized = false;
-                }
-            }
-            else
-            {
-                NC_LOG_WARNING("[MapObject Extractor] {0} exceeds the maximum serialized size ({1} bytes)", fileListEntry.fileName, serializedSize);
-            }
-
-            if (serialized)
-            {
-                auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, buffer->writtenData);
-                if (manifest.AddFile(runtime, fileListEntry.path, buffer))
-                {
-                    semanticSucceeded.fetch_add(1, std::memory_order_relaxed);
-                }
-                else
-                {
-                    NC_LOG_WARNING("[MapObject Extractor] Failed to add {0} to PACT storage", fileListEntry.fileName);
-                }
-            }
-            else
-            {
-                NC_LOG_WARNING("[MapObject Extractor] Failed to extract {0}", fileListEntry.fileName);
-            }
-
-            {
-                semanticNanoseconds.fetch_add(static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - semanticStart).count()), std::memory_order_relaxed);
                 std::scoped_lock scopedLock(printMutex);
 
                 const u32 processedFiles = ++numProcessedFiles;
@@ -336,20 +198,14 @@ void MapObjectExtractor::Process()
     const ModelV2Builder::MeshoptimizerTimings meshoptimizerTimings = ModelV2Builder::GetMeshoptimizerTimings();
     const auto seconds = [](u64 nanoseconds) { return static_cast<f64>(nanoseconds) / 1'000'000'000.0; };
     const f64 extractorWallSeconds = std::chrono::duration<f64>(std::chrono::steady_clock::now() - extractorWallStart).count();
-    NC_LOG_INFO("[MapObject Extractor] Timings (shared CASC/parse excluded, worker time): Model V2 render assets {0:.3f}s for {1} files; semantic sidecars {2:.3f}s for {3} files",
-        static_cast<f64>(modelV2Nanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0,
-        modelV2Succeeded.load(std::memory_order_relaxed),
-        static_cast<f64>(semanticNanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0,
-        semanticSucceeded.load(std::memory_order_relaxed));
+    NC_LOG_INFO("[MapObject Extractor] Timings (shared CASC/parse excluded, worker time): Model V2 assets {0:.3f}s for {1} files", static_cast<f64>(modelV2Nanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0, modelV2Succeeded.load(std::memory_order_relaxed));
 
     // Persist benchmark data because redirected Windows consoles used by
     // unattended extraction do not reliably preserve the logger output.
-    // MapObject runs before ComplexModel, so start a fresh report for this run.
+    // WMO extraction runs before M2 extraction, so start a fresh report for this run.
     std::ofstream timingFile("Data/Pact/model_extraction_timings.txt", std::ios::trunc);
     timingFile << "WMO DirectModelV2ConvertCookWriteWorkerSeconds=" << static_cast<f64>(modelV2Nanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0
                << " Files=" << modelV2Succeeded.load(std::memory_order_relaxed)
-               << " SemanticSidecarConvertSerializeWriteWorkerSeconds=" << static_cast<f64>(semanticNanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0
-               << " Files=" << semanticSucceeded.load(std::memory_order_relaxed)
                << " MeshoptimizerTotalWorkerSeconds=" << seconds(meshoptimizerTimings.GetTotalNanoseconds())
                << " Simplification=" << seconds(meshoptimizerTimings.simplificationNanoseconds)
                << " Tangents=" << seconds(meshoptimizerTimings.tangentGenerationNanoseconds)
