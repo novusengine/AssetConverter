@@ -91,9 +91,9 @@ void ComplexModelExtractor::Process()
 
     std::mutex printMutex;
     std::atomic<u64> modelV2Nanoseconds = 0;
-    std::atomic<u64> legacyNanoseconds = 0;
+    std::atomic<u64> semanticNanoseconds = 0;
     std::atomic<u32> modelV2Succeeded = 0;
-    std::atomic<u32> legacySucceeded = 0;
+    std::atomic<u32> semanticSucceeded = 0;
     u32 numProcessedFiles = 0;
     u16 progressFlags = 0;
 
@@ -103,7 +103,7 @@ void ComplexModelExtractor::Process()
     const auto extractorWallStart = std::chrono::steady_clock::now();
 
     enki::TaskSet convertM2Task(numModelsToProcess, [&runtime, &cascLoader, &fileListQueue, &numProcessedFiles, &progressFlags, &printMutex,
-        &modelV2Nanoseconds, &legacyNanoseconds, &modelV2Succeeded, &legacySucceeded, numModelsToProcess](enki::TaskSetPartition range, uint32_t threadNum)
+        &modelV2Nanoseconds, &semanticNanoseconds, &modelV2Succeeded, &semanticSucceeded, numModelsToProcess](enki::TaskSetPartition range, uint32_t threadNum)
     {
         M2::Parser m2Parser = {};
         std::shared_ptr<Bytebuffer> buffer;
@@ -118,7 +118,8 @@ void ComplexModelExtractor::Process()
             M2::Layout m2 = { };
             if (!m2Parser.TryParse(M2::Parser::ParseType::Root, rootBuffer, m2))
             {
-                NC_LOG_WARNING("Tried to parse M2 Root but failed {0}", fileListEntry.fileID);
+                NC_LOG_WARNING("[ComplexModel Extractor] Failed to parse M2 root {0} (FileDataID {1})",
+                    fileListEntry.fileName, fileListEntry.fileID);
                 continue;
             }
 
@@ -154,41 +155,15 @@ void ComplexModelExtractor::Process()
             else
                 NC_LOG_WARNING("[ComplexModel Extractor] Failed to extract Model V2 {0}", fileListEntry.fileName);
 
-            const auto legacyStart = std::chrono::steady_clock::now();
+            const auto semanticStart = std::chrono::steady_clock::now();
             Model::ComplexModel cmodel = { };
             if (!Model::ComplexModel::FromM2(rootBuffer, skinBuffer, m2, cmodel))
                 continue;
 
-            // Post Process
+            // ComplexModel is retained temporarily as a semantic sidecar for animation,
+            // attachments, bounds, and physics. Model V2 is the only rendering payload.
             {
-                for (u32 i = 0; i < cmodel.textures.size(); i++)
-                {
-                    Model::ComplexModel::Texture& texture = cmodel.textures[i];
-
-                    u32 fileID = static_cast<u32>(texture.textureHash); // This has not been converted to a textureHash yet.
-                    texture.textureHash = std::numeric_limits<u64>().max(); // Default to invalid
-
-                    if (fileID == 0 || fileID == std::numeric_limits<u32>().max())
-                        continue;
-
-                    if (!cascLoader->InCascAndListFile(fileID))
-                        continue;
-
-                    const std::string& cascFilePath = cascLoader->GetFilePathFromListFileID(fileID);
-                    if (cascFilePath.size() == 0)
-                        continue;
-
-                    fs::path texturePath = fs::path("texture") / cascFilePath;
-                    texturePath.replace_extension("dds").make_preferred();
-
-                    std::string textureName = texturePath.string();
-                    std::transform(textureName.begin(), textureName.end(), textureName.begin(), ::tolower);
-                    std::replace(textureName.begin(), textureName.end(), '\\', '/');
-
-                    texture.textureHash = XXHash64::hash(textureName.c_str(), textureName.length(), 0);
-                }
-
-                // if build physics shapes
+                // Build the runtime physics blob before discarding the source collision mesh.
                 {
                     u32 numCollisionVertices = static_cast<u32>(cmodel.collisionVertexPositions.size());
                     u32 numCollisionIndices = static_cast<u32>(cmodel.collisionIndices.size());
@@ -240,6 +215,22 @@ void ComplexModelExtractor::Process()
                         }
                     }
                 }
+
+                cmodel.vertices.clear();
+                cmodel.textures.clear();
+                cmodel.materials.clear();
+                cmodel.textureIndexLookupTable.clear();
+                cmodel.textureUnitLookupTable.clear();
+                cmodel.textureTransparencyLookupTable.clear();
+                cmodel.textureTransformLookupTable.clear();
+                cmodel.textureCombinerCombos.clear();
+                cmodel.collisionVertexPositions.clear();
+                cmodel.collisionIndices.clear();
+                cmodel.collisionNormals.clear();
+                cmodel.cameras.clear();
+                cmodel.decorationSets.clear();
+                cmodel.decorations.clear();
+                cmodel.modelData = {};
             }
 
             constexpr size_t MAX_SERIALIZED_MODEL_SIZE = 64 * 1024 * 1024;
@@ -270,11 +261,7 @@ void ComplexModelExtractor::Process()
                 auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, buffer->writtenData);
                 if (manifest.AddFile(runtime, fileListEntry.path, buffer))
                 {
-                    legacySucceeded.fetch_add(1, std::memory_order_relaxed);
-                    if (runtime->isInDebugMode)
-                    {
-                        NC_LOG_INFO("[ComplexModel Extractor] Extracted {0}", fileListEntry.fileName);
-                    }
+                    semanticSucceeded.fetch_add(1, std::memory_order_relaxed);
                 }
                 else
                 {
@@ -287,8 +274,8 @@ void ComplexModelExtractor::Process()
             }
 
             {
-                legacyNanoseconds.fetch_add(static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - legacyStart).count()), std::memory_order_relaxed);
+                semanticNanoseconds.fetch_add(static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - semanticStart).count()), std::memory_order_relaxed);
                 std::scoped_lock scopedLock(printMutex);
                 
                 const u32 processedFiles = ++numProcessedFiles;
@@ -315,19 +302,19 @@ void ComplexModelExtractor::Process()
     const ModelV2Builder::MeshoptimizerTimings meshoptimizerTimings = ModelV2Builder::GetMeshoptimizerTimings();
     const auto seconds = [](u64 nanoseconds) { return static_cast<f64>(nanoseconds) / 1'000'000'000.0; };
     const f64 extractorWallSeconds = std::chrono::duration<f64>(std::chrono::steady_clock::now() - extractorWallStart).count();
-    NC_LOG_INFO("[ComplexModel Extractor] Timings (shared CASC/parse excluded, worker time): direct Model V2 convert/cook/write {0:.3f}s for {1} files; legacy ComplexModel convert/serialize/write {2:.3f}s for {3} files",
+    NC_LOG_INFO("[ComplexModel Extractor] Timings (shared CASC/parse excluded, worker time): Model V2 render assets {0:.3f}s for {1} files; semantic sidecars {2:.3f}s for {3} files",
         static_cast<f64>(modelV2Nanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0,
         modelV2Succeeded.load(std::memory_order_relaxed),
-        static_cast<f64>(legacyNanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0,
-        legacySucceeded.load(std::memory_order_relaxed));
+        static_cast<f64>(semanticNanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0,
+        semanticSucceeded.load(std::memory_order_relaxed));
 
     // Persist benchmark data because redirected Windows consoles used by
     // unattended extraction do not reliably preserve the logger output.
     std::ofstream timingFile("Data/Pact/model_extraction_timings.txt", std::ios::app);
     timingFile << "M2 DirectModelV2ConvertCookWriteWorkerSeconds=" << static_cast<f64>(modelV2Nanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0
                << " Files=" << modelV2Succeeded.load(std::memory_order_relaxed)
-               << " LegacyComplexModelConvertSerializeWriteWorkerSeconds=" << static_cast<f64>(legacyNanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0
-               << " Files=" << legacySucceeded.load(std::memory_order_relaxed)
+               << " SemanticSidecarConvertSerializeWriteWorkerSeconds=" << static_cast<f64>(semanticNanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0
+               << " Files=" << semanticSucceeded.load(std::memory_order_relaxed)
                << " MeshoptimizerTotalWorkerSeconds=" << seconds(meshoptimizerTimings.GetTotalNanoseconds())
                << " Simplification=" << seconds(meshoptimizerTimings.simplificationNanoseconds)
                << " Tangents=" << seconds(meshoptimizerTimings.tangentGenerationNanoseconds)

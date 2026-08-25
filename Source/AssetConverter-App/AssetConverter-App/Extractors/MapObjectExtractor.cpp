@@ -97,9 +97,9 @@ void MapObjectExtractor::Process()
 
     std::mutex printMutex;
     std::atomic<u64> modelV2Nanoseconds = 0;
-    std::atomic<u64> legacyNanoseconds = 0;
+    std::atomic<u64> semanticNanoseconds = 0;
     std::atomic<u32> modelV2Succeeded = 0;
-    std::atomic<u32> legacySucceeded = 0;
+    std::atomic<u32> semanticSucceeded = 0;
     u32 numProcessedFiles = 0;
     u16 progressFlags = 0;
 
@@ -109,7 +109,7 @@ void MapObjectExtractor::Process()
     const auto extractorWallStart = std::chrono::steady_clock::now();
 
     enki::TaskSet convertWMOTask(numRootFiles, [&runtime, &cascLoader, &fileListQueue, &numProcessedFiles, &progressFlags, &printMutex,
-        &modelV2Nanoseconds, &legacyNanoseconds, &modelV2Succeeded, &legacySucceeded, numRootFiles](enki::TaskSetPartition range, uint32_t threadNum)
+        &modelV2Nanoseconds, &semanticNanoseconds, &modelV2Succeeded, &semanticSucceeded, numRootFiles](enki::TaskSetPartition range, uint32_t threadNum)
     {
         Wmo::Parser wmoParser = { };
         std::shared_ptr<Bytebuffer> buffer;
@@ -187,75 +187,10 @@ void MapObjectExtractor::Process()
             else
                 NC_LOG_WARNING("[MapObject Extractor] Failed to extract Model V2 {0}", fileListEntry.fileName);
 
-            const auto legacyStart = std::chrono::steady_clock::now();
+            const auto semanticStart = std::chrono::steady_clock::now();
             Model::MapObject mapObject = { };
             if (!Model::MapObject::FromWMO(wmo, mapObject))
                 continue;
-
-            // Post Processing
-            {
-                std::string pathAsString = "";
-
-                // Convert Material FileIDs to TextureHash
-                for (u32 i = 0; i < mapObject.materials.size(); i++)
-                {
-                    Model::MapObject::Material& material = mapObject.materials[i];
-
-                    for (u32 j = 0; j < 3; j++)
-                    {
-                        u32 textureFileID = static_cast<u32>(material.textureID[j]);
-                        if (textureFileID == std::numeric_limits<u32>().max())
-                            continue;
-
-                        if (!cascLoader->InCascAndListFile(textureFileID))
-                            continue;
-
-                        const std::string& cascFilePath = cascLoader->GetFilePathFromListFileID(textureFileID);
-                        if (cascFilePath.size() == 0)
-                        {
-                            material.textureID[j] = std::numeric_limits<u32>().max();
-                            continue;
-                        }
-
-                        fs::path texturePath = fs::path("texture") / cascFilePath;
-                        texturePath.replace_extension("dds").make_preferred();
-
-                        pathAsString = texturePath.string();
-                        std::transform(pathAsString.begin(), pathAsString.end(), pathAsString.begin(), ::tolower);
-                        std::replace(pathAsString.begin(), pathAsString.end(), '\\', '/');
-
-                        material.textureID[j] = XXHash64::hash(pathAsString.c_str(), pathAsString.length(), 0);
-                    }
-                }
-
-                // Convert Decoration FileIDs to PathHash
-                {
-                    for (u32 i = 0; i < mapObject.decorations.size(); i++)
-                    {
-                        Model::MapObject::Decoration& decoration = mapObject.decorations[i];
-
-                        u32 decorationFileID = static_cast<u32>(decoration.nameID);
-                        if (decorationFileID == std::numeric_limits<u64>().max())
-                            continue;
-
-                        const std::string& cascFilePath = cascLoader->GetFilePathFromListFileID(decorationFileID);
-                        if (cascFilePath.size() == 0)
-                        {
-                            decoration.nameID = std::numeric_limits<u64>().max();
-                            continue;
-                        }
-
-                        fs::path cmodelPath = fs::path("model") / cascFilePath;
-                        cmodelPath.replace_extension(Model::FILE_EXTENSION);
-
-                        pathAsString = cmodelPath.string();
-                        std::transform(pathAsString.begin(), pathAsString.end(), pathAsString.begin(), ::tolower);
-                        std::replace(pathAsString.begin(), pathAsString.end(), '\\', '/');
-
-                        decoration.nameID = XXHash64::hash(pathAsString.c_str(), pathAsString.length(), 0);
-                    }
-                }
-            }
 
             Model::ComplexModel cmodel;
             if (!Model::ComplexModel::FromMapObject(mapObject, cmodel))
@@ -313,6 +248,25 @@ void MapObjectExtractor::Process()
                     }
                 }
             }
+
+            // WMO sidecars retain only bounds and the cooked physics blob. Geometry,
+            // materials, textures, and embedded decorations are owned by Model V2.
+            cmodel.vertices.clear();
+            cmodel.textures.clear();
+            cmodel.materials.clear();
+            cmodel.textureTransforms.clear();
+            cmodel.textureIndexLookupTable.clear();
+            cmodel.textureUnitLookupTable.clear();
+            cmodel.textureTransparencyLookupTable.clear();
+            cmodel.textureTransformLookupTable.clear();
+            cmodel.textureCombinerCombos.clear();
+            cmodel.collisionVertexPositions.clear();
+            cmodel.collisionIndices.clear();
+            cmodel.collisionNormals.clear();
+            cmodel.cameras.clear();
+            cmodel.decorationSets.clear();
+            cmodel.decorations.clear();
+            cmodel.modelData = {};
             constexpr size_t MAX_SERIALIZED_MODEL_SIZE = 64 * 1024 * 1024;
             const size_t serializedSize = cmodel.GetSerializedSize();
             bool serialized = false;
@@ -341,11 +295,7 @@ void MapObjectExtractor::Process()
                 auto& manifest = runtime->pactInfo.GetManifestForFile(runtime, buffer->writtenData);
                 if (manifest.AddFile(runtime, fileListEntry.path, buffer))
                 {
-                    legacySucceeded.fetch_add(1, std::memory_order_relaxed);
-                    if (runtime->isInDebugMode)
-                    {
-                        NC_LOG_INFO("[MapObject Extractor] Extracted {0}", fileListEntry.fileName);
-                    }
+                    semanticSucceeded.fetch_add(1, std::memory_order_relaxed);
                 }
                 else
                 {
@@ -358,8 +308,8 @@ void MapObjectExtractor::Process()
             }
 
             {
-                legacyNanoseconds.fetch_add(static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - legacyStart).count()), std::memory_order_relaxed);
+                semanticNanoseconds.fetch_add(static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - semanticStart).count()), std::memory_order_relaxed);
                 std::scoped_lock scopedLock(printMutex);
 
                 const u32 processedFiles = ++numProcessedFiles;
@@ -386,11 +336,11 @@ void MapObjectExtractor::Process()
     const ModelV2Builder::MeshoptimizerTimings meshoptimizerTimings = ModelV2Builder::GetMeshoptimizerTimings();
     const auto seconds = [](u64 nanoseconds) { return static_cast<f64>(nanoseconds) / 1'000'000'000.0; };
     const f64 extractorWallSeconds = std::chrono::duration<f64>(std::chrono::steady_clock::now() - extractorWallStart).count();
-    NC_LOG_INFO("[MapObject Extractor] Timings (shared CASC/parse excluded, worker time): direct Model V2 convert/cook/write {0:.3f}s for {1} files; legacy ComplexModel convert/serialize/write {2:.3f}s for {3} files",
+    NC_LOG_INFO("[MapObject Extractor] Timings (shared CASC/parse excluded, worker time): Model V2 render assets {0:.3f}s for {1} files; semantic sidecars {2:.3f}s for {3} files",
         static_cast<f64>(modelV2Nanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0,
         modelV2Succeeded.load(std::memory_order_relaxed),
-        static_cast<f64>(legacyNanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0,
-        legacySucceeded.load(std::memory_order_relaxed));
+        static_cast<f64>(semanticNanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0,
+        semanticSucceeded.load(std::memory_order_relaxed));
 
     // Persist benchmark data because redirected Windows consoles used by
     // unattended extraction do not reliably preserve the logger output.
@@ -398,8 +348,8 @@ void MapObjectExtractor::Process()
     std::ofstream timingFile("Data/Pact/model_extraction_timings.txt", std::ios::trunc);
     timingFile << "WMO DirectModelV2ConvertCookWriteWorkerSeconds=" << static_cast<f64>(modelV2Nanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0
                << " Files=" << modelV2Succeeded.load(std::memory_order_relaxed)
-               << " LegacyComplexModelConvertSerializeWriteWorkerSeconds=" << static_cast<f64>(legacyNanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0
-               << " Files=" << legacySucceeded.load(std::memory_order_relaxed)
+               << " SemanticSidecarConvertSerializeWriteWorkerSeconds=" << static_cast<f64>(semanticNanoseconds.load(std::memory_order_relaxed)) / 1'000'000'000.0
+               << " Files=" << semanticSucceeded.load(std::memory_order_relaxed)
                << " MeshoptimizerTotalWorkerSeconds=" << seconds(meshoptimizerTimings.GetTotalNanoseconds())
                << " Simplification=" << seconds(meshoptimizerTimings.simplificationNanoseconds)
                << " Tangents=" << seconds(meshoptimizerTimings.tangentGenerationNanoseconds)

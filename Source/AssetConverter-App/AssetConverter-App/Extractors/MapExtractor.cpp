@@ -481,10 +481,10 @@ void MapExtractor::Process(bool extractMapAssets, bool generateNavMesh)
                             else
                             {
                                 const std::string& sourceModelPath = cascLoader->GetFilePathFromListFileID(placementFileID);
-                                std::filesystem::path legacyModelPath = std::filesystem::path("model") / std::filesystem::path(sourceModelPath).replace_extension(Model::FILE_EXTENSION);
-                                std::string legacyModelPathStr = legacyModelPath.generic_string();
-                                std::transform(legacyModelPathStr.begin(), legacyModelPathStr.end(), legacyModelPathStr.begin(), ::tolower);
-                                placementInfo.nameHash = XXHash64::hash(legacyModelPathStr.c_str(), legacyModelPathStr.size(), 0);
+                                std::filesystem::path semanticModelPath = std::filesystem::path("model") / std::filesystem::path(sourceModelPath).replace_extension(Model::FILE_EXTENSION);
+                                std::string semanticModelPathStr = semanticModelPath.generic_string();
+                                std::transform(semanticModelPathStr.begin(), semanticModelPathStr.end(), semanticModelPathStr.begin(), ::tolower);
+                                placementInfo.nameHash = XXHash64::hash(semanticModelPathStr.c_str(), semanticModelPathStr.size(), 0);
 
                                 std::filesystem::path modelV2Path = std::filesystem::path("model") / std::filesystem::path(sourceModelPath).replace_extension(FileFormat::Model::FILE_EXTENSION);
                                 std::string modelV2PathStr = modelV2Path.generic_string();
