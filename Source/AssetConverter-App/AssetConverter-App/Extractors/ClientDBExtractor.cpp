@@ -347,17 +347,14 @@ bool ClientDBExtractor::ExtractMapData(const std::string& name, bool writePact)
             std::string internalName = GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 0);;
             std::string mapName = GetStringFromRecordIndex(layout, db2Parser, db2RecordIndex, 1);
 
-            map.nameInternal = mapStorage.AddString(internalName);
+            map.internalName = mapStorage.AddString(internalName);
             map.name = mapStorage.AddString(mapName);
 
-            const u8 instanceType = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 7);
-            map.instanceType = instanceType;
+            const u8 type = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 7);
+            map.type = type;
 
             const u32* flags = db2Parser.GetFieldPtr<u32>(layout, sectionID, recordID, recordData, 22);
             map.flags = flags[0];
-
-            const u8 expansion = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 8);
-            map.expansionID = expansion;
 
             const u8 maxPlayers = db2Parser.GetField<u8>(layout, sectionID, recordID, recordData, 18);
             map.maxPlayers = maxPlayers;
