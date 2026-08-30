@@ -215,7 +215,7 @@ void MapExtractor::Process(bool extractMapAssets, bool generateNavMesh)
     {
         ZoneScopedN("MapExtractor::Process::Each");
 
-        std::string internalName = mapStorage.GetString(map.nameInternal);
+        std::string internalName = mapStorage.GetString(map.internalName);
         StringUtils::ToLower(internalName);
         if (!mapSelection.Contains(id, internalName))
             return true;

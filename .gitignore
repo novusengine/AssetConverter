@@ -34,7 +34,8 @@ Source/Meta/MetaGen/
 Source/Meta/MetaGen.staging/
 Source/Meta/MetaGen.previous/
 
-build*/ 
+build*/
+Build*/
 .vs/
 .vscode/
 out/
