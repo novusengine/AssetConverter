@@ -7,6 +7,7 @@
 #include "Extractors/TextureExtractor.h"
 #include "Model/ModelV2Allocation.h"
 #include "Model/ModelV2Builder.h"
+#include "Animation/WoWAnimationConverter.h"
 #include "Util/ServiceLocator.h"
 
 #include <Base/Types.h>
@@ -108,7 +109,7 @@ namespace
     }
 }
 
-i32 main()
+i32 main(i32 argc, char** argv)
 {
     quill::Backend::start();
 
@@ -116,6 +117,8 @@ i32 main()
     quill::Logger* logger = quill::Frontend::create_or_get_logger("root", std::move(console_sink), "%(time:<16) LOG_%(log_level:<11) %(message)", "%H:%M:%S.%Qms", quill::Timezone::LocalTime, quill::ClockSourceType::System);
 
     Runtime* runtime = ServiceLocator::SetRuntime(new Runtime());
+    if ((argc == 3 || argc == 4) && std::string_view(argv[1]) == "--export-character-animations")
+        return WoWAnimationConverter::ExportCharacterAnimations(runtime, argv[2], argc == 4 ? argv[3] : nullptr);
     bool isExtractingEnabled = false;
     bool isDB2Enabled = false;
     bool isMapEnabled = false;

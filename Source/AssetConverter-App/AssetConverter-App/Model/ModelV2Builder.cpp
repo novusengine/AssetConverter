@@ -299,6 +299,8 @@ namespace
         std::vector<vec3> collisionVertices;
         std::vector<u32> collisionIndices;
         FileFormat::Model::Bounds assetBounds;
+        u64 skeletonAssetID = FileFormat::INVALID_ASSET_ID;
+        u64 animationBoundsAssetID = FileFormat::INVALID_ASSET_ID;
         bool hasAssetBounds = false;
         bool isWMO = false;
     };
@@ -1769,6 +1771,8 @@ namespace
         FileFormat::Model::ModelData data;
         FileFormat::Model::Mesh mesh;
         mesh.bounds = CalculateBounds(source.vertices);
+        mesh.skeletonAssetID = source.skeletonAssetID;
+        mesh.animationBoundsAssetID = source.animationBoundsAssetID;
         mesh.positionDecodeOffset = mesh.bounds.center - mesh.bounds.extents;
         mesh.positionDecodeExtent = mesh.bounds.extents * 2.0f;
 
@@ -1812,7 +1816,7 @@ namespace
                     });
                 }
             }
-            data.materialSlots.push_back({ instanceAssetID, HashString(outputPath + "/material_" + std::to_string(source.batches[batchIndex].stableID)), source.batches[batchIndex].stableID, 0 });
+            data.materialSlots.push_back({ runtime->previewMaterialAssetID != FileFormat::INVALID_ASSET_ID ? runtime->previewMaterialAssetID : instanceAssetID, HashString(outputPath + "/material_" + std::to_string(source.batches[batchIndex].stableID)), source.batches[batchIndex].stableID, 0 });
         }
         std::sort(data.parameters.begin(), data.parameters.end(), [](const auto& left, const auto& right)
         {
@@ -2564,8 +2568,7 @@ bool ModelV2Builder::BuildDisplayData(Runtime* runtime)
     return true;
 }
 
-bool ModelV2Builder::ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffer>& rootBuffer, std::shared_ptr<Bytebuffer>& skinBuffer,
-    M2::Layout& layout, const std::vector<u64>& textureAssetIDs, const std::string& outputPath)
+bool ModelV2Builder::ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffer>& rootBuffer, std::shared_ptr<Bytebuffer>& skinBuffer, M2::Layout& layout, const std::vector<u64>& textureAssetIDs, const std::string& outputPath, u64 skeletonAssetID, const std::vector<u8>& jointRemap)
 {
     auto isConstantZero = [&rootBuffer](const M2::M2Track<i16>& track)
     {
@@ -2585,6 +2588,12 @@ bool ModelV2Builder::ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffe
     const auto sourcePreparationStart = MeshoptimizerTiming::Start();
     SourceModel source;
     source.vertices.resize(layout.md21.vertices.size);
+    source.skeletonAssetID = skeletonAssetID;
+    if (skeletonAssetID != FileFormat::INVALID_ASSET_ID)
+    {
+        const std::string boundsPath = std::filesystem::path(outputPath).replace_extension(".animationbounds").generic_string();
+        source.animationBoundsAssetID = XXHash64::hash(boundsPath.data(), boundsPath.size(), 0);
+    }
     for (u32 vertexIndex = 0; vertexIndex < layout.md21.vertices.size; ++vertexIndex)
     {
         const M2::M2Vertex& input = *layout.md21.vertices.GetElement(rootBuffer, vertexIndex);
@@ -2598,6 +2607,15 @@ bool ModelV2Builder::ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffe
         vertex.uv1 = input.uvCords[1];
         std::copy(std::begin(input.boneIndices), std::end(input.boneIndices), vertex.jointIndices.begin());
         std::copy(std::begin(input.boneWeights), std::end(input.boneWeights), vertex.jointWeights.begin());
+        if (!jointRemap.empty())
+        {
+            for (u32 influence = 0; influence < 4; ++influence)
+            {
+                if (!vertex.jointWeights[influence]) { vertex.jointIndices[influence] = 0; continue; }
+                if (vertex.jointIndices[influence] >= jointRemap.size()) return false;
+                vertex.jointIndices[influence] = jointRemap[vertex.jointIndices[influence]];
+            }
+        }
     }
 
     source.assetBounds = CalculateBounds(source.vertices);

@@ -14,6 +14,7 @@
 #include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <shared_mutex>
 
@@ -56,6 +57,7 @@ public:
 
 private:
     std::mutex _rolloverMutex;
+    PactManifestInfo _looseManifest;
 
     size_t _currentManifestIndex = 0;
     std::vector<std::unique_ptr<PactManifestInfo>> _manifests;
@@ -150,10 +152,12 @@ public:
         std::filesystem::path pactManifest;
         std::filesystem::path pactData;
         std::filesystem::path navMesh;
+        std::filesystem::path looseOutput;
     };
 
 public:
     bool isInDebugMode = false;
+    u64 previewMaterialAssetID = std::numeric_limits<u64>::max();
     Paths paths = {};
     PactInfo pactInfo = {};
 

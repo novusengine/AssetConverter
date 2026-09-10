@@ -4,6 +4,7 @@
 
 #include <array>
 #include <memory>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -56,8 +57,7 @@ public:
 
     // These paths consume the parsed source layouts directly and emit the complete
     // runtime Model asset, including bounds and cooked physics data.
-    static bool ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffer>& rootBuffer, std::shared_ptr<Bytebuffer>& skinBuffer,
-        M2::Layout& layout, const std::vector<u64>& textureAssetIDs, const std::string& outputPath);
+    static bool ConvertM2AndAdd(Runtime* runtime, std::shared_ptr<Bytebuffer>& rootBuffer, std::shared_ptr<Bytebuffer>& skinBuffer, M2::Layout& layout, const std::vector<u64>& textureAssetIDs, const std::string& outputPath, u64 skeletonAssetID = std::numeric_limits<u64>::max(), const std::vector<u8>& jointRemap = {});
     static bool ConvertWMOAndAdd(Runtime* runtime, Wmo::Layout& layout,
         const std::vector<std::array<u64, 3>>& materialTextureAssetIDs,
         const std::vector<u64>& decorationModelAssetIDs, const std::string& outputPath);

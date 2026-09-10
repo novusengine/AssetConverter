@@ -29,6 +29,35 @@ namespace
 #endif
     }
 
+    bool WriteLooseAsset(Runtime* runtime, const std::string& path, const u8* data, size_t size, PACT::PactFileID* outFileID)
+    {
+        const fs::path relative(path);
+        if (relative.is_absolute() || relative.empty()) return false;
+        for (const auto& part : relative) if (part == "..") return false;
+        const u64 hash = XXHash64::hash(path.data(), path.size(), 0);
+        PACT::PactFileID fileID = 0;
+        if (!runtime->pactInfo.AddFile(hash, fileID)) return false;
+        const fs::path destination = runtime->paths.looseOutput / relative;
+        const fs::path temporary = destination.string() + ".pending";
+        try
+        {
+            fs::create_directories(destination.parent_path());
+            std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+            stream.write(reinterpret_cast<const char*>(data), size);
+            stream.close();
+            if (!stream || !ReplaceFileAtomically(temporary, destination)) throw std::runtime_error("Loose asset publication failed");
+            if (outFileID) *outFileID = fileID;
+            return true;
+        }
+        catch (const std::exception& error)
+        {
+            runtime->pactInfo.RemoveFile(hash, fileID);
+            runtime->pactInfo.MarkFailed();
+            NC_LOG_ERROR("Loose asset {}: {}", path, error.what());
+            return false;
+        }
+    }
+
     void RemoveSupersededLocalFiles(const Runtime::Paths& paths, const std::vector<PACT::PactDigest>& supersededDigests, const std::vector<PACT::PactManifestRef>& retainedRefs)
     {
         std::set<PACT::PactDigest> retainedDigests;
@@ -176,6 +205,7 @@ bool PactManifestInfo::Initialize(const u64 manifestID, const std::filesystem::p
 
 bool PactManifestInfo::AddFile(Runtime* runtime, const std::string& path, std::shared_ptr<Bytebuffer>& data, PACT::PactFileID* outFileID)
 {
+    if (!runtime->paths.looseOutput.empty()) return data && WriteLooseAsset(runtime, path, data->GetDataPointer(), data->writtenData, outFileID);
     u64 hash = XXHash64::hash(path.c_str(), path.length(), 0);
 
     PACT::PactFileID fileID = 0;
@@ -285,6 +315,7 @@ bool PactManifestInfo::AddFile(Runtime* runtime, const std::string& path, std::s
 
 bool PactManifestInfo::AddFile(Runtime* runtime, const std::string& path, std::vector<u8>& data, PACT::PactFileID* outFileID)
 {
+    if (!runtime->paths.looseOutput.empty()) return WriteLooseAsset(runtime, path, data.data(), data.size(), outFileID);
     u64 hash = XXHash64::hash(path.c_str(), path.length(), 0);
 
     PACT::PactFileID fileID = 0;
@@ -474,6 +505,7 @@ bool ManifestPool::Finalize()
 }
 PactManifestInfo& ManifestPool::GetManifestForFile(Runtime* runtime, size_t fileSize)
 {
+    if (!runtime->paths.looseOutput.empty()) return _looseManifest;
     NC_ASSERT(fileSize <= PACT::Config::MAX_MANIFEST_DATA_SIZE, "Filesize exceeds the max size for a manifest");
 
     std::scoped_lock lock(_rolloverMutex);
