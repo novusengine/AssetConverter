@@ -1,4 +1,4 @@
-# WoW Material Program Manifest
+# M2 Material Program Manifest
 
 AssetConverter writes `material_program_manifest.json` in `Data/Pact` for the
 offline material cooker. The PACT `.material` assets remain the runtime source
@@ -9,7 +9,7 @@ registry.
 
 `programKey` is XXHash64 of `canonicalDefinition`. Programs are sorted by this
 key, and extraction fails if one key is registered with different canonical
-bytes. `canonicalKey` is the lossless textual form `wow/<16 hex digits>`.
+bytes. `canonicalKey` is the lossless textual form `m2/<16 hex digits>`.
 `programID` is only the diagnostic XOR-fold of the 64-bit key.
 
 The canonical byte definition is little-endian and contains, in order:

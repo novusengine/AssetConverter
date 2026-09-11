@@ -5,7 +5,7 @@
 #include <ostream>
 
 // Rebuilds source hierarchy into a concrete neutral skeleton and retains cooker-only mappings.
-class WoWSkeletonCooker
+class M2SkeletonCooker
 {
 public:
     struct Result

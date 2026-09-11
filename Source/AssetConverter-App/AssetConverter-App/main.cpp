@@ -7,7 +7,7 @@
 #include "Extractors/TextureExtractor.h"
 #include "Model/ModelV2Allocation.h"
 #include "Model/ModelV2Builder.h"
-#include "Animation/WoWAnimationConverter.h"
+#include "Animation/M2AnimationConverter.h"
 #include "Util/ServiceLocator.h"
 
 #include <Base/Types.h>
@@ -118,7 +118,7 @@ i32 main(i32 argc, char** argv)
 
     Runtime* runtime = ServiceLocator::SetRuntime(new Runtime());
     if ((argc == 3 || argc == 4) && std::string_view(argv[1]) == "--export-character-animations")
-        return WoWAnimationConverter::ExportCharacterAnimations(runtime, argv[2], argc == 4 ? argv[3] : nullptr);
+        return M2AnimationConverter::ExportCharacterAnimations(runtime, argv[2], argc == 4 ? argv[3] : nullptr);
     bool isExtractingEnabled = false;
     bool isDB2Enabled = false;
     bool isMapEnabled = false;

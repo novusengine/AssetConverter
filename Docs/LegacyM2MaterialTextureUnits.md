@@ -1,4 +1,4 @@
-# Legacy WoW material TextureUnit investigation
+# Legacy M2 material TextureUnit investigation
 
 This note records the August 2026 scan of the Classic Era PACT and the resulting material-layout discussion. It is design input, not a finalized contract.
 
@@ -25,13 +25,13 @@ Across 82,025 serialized render batches:
 
 Representative three-unit assets include Arthas/Lich King, Kel'Thuzad, water and poison elementals, Frostmourne-related weapons, and several raid items.
 
-These counts describe this Classic Era corpus. They are not a promise about later WoW clients; the source format can represent more units.
+These counts describe this Classic Era corpus. They are not a promise about later M2 clients; the source format can represent more units.
 
 ## Data represented by a TextureUnit
 
 The source M2 batch associates the following material-relevant data with each ordered TextureUnit:
 
-- WoW shader/combiner ID.
+- M2 shader/combiner ID.
 - TextureUnit flags, including projected/transform-related behavior.
 - Material-layer index.
 - Material flags and blend mode.
@@ -45,7 +45,7 @@ Each referenced texture additionally needs a texture binding, sampler/wrap state
 
 ## Candidate fixed legacy ABI
 
-A general engine-wide layered-material graph is not required just to represent this content. One dedicated legacy-WoW material program can contain an ordered fixed-capacity unit array, with a one-unit fast path.
+A general engine-wide layered-material graph is not required just to represent this content. One dedicated legacy-M2 material program can contain an ordered fixed-capacity unit array, with a one-unit fast path.
 
 For the observed worst case, a clean static block fits in 128 bytes:
 
@@ -89,4 +89,4 @@ The existing converted output is sufficient for the cardinality measurements but
 - `textureTransparencyLookupID` exists in the legacy in-memory type but is omitted by ComplexModel serialization.
 - Model V2 currently retains shader ID, material, layer, flags, and texture references, but does not retain UV selection, color lookup, texture-transform lookup, or transparency-animation lookup.
 
-Those fields should be recovered directly from M2 source data before finalizing the production legacy-WoW material ABI.
+Those fields should be recovered directly from M2 source data before finalizing the production legacy-M2 material ABI.

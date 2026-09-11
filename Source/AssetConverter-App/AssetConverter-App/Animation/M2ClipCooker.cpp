@@ -1,4 +1,4 @@
-#include "WoWClipCooker.h"
+#include "M2ClipCooker.h"
 #include <FileFormat/Shared.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/quaternion.hpp>
@@ -66,7 +66,7 @@ namespace
     }
 }
 
-std::vector<FileFormat::Animation::LocalTransform> WoWClipCooker::Sample(const std::shared_ptr<Bytebuffer>& bytes, const M2::Layout& model, const WoWSkeletonCooker::Result& skeleton, u32 sequence, double milliseconds)
+std::vector<FileFormat::Animation::LocalTransform> M2ClipCooker::Sample(const std::shared_ptr<Bytebuffer>& bytes, const M2::Layout& model, const M2SkeletonCooker::Result& skeleton, u32 sequence, double milliseconds)
 {
     const u32 count = model.md21.bones.size;
     std::vector<mat4x4> skin(count), original(count), cooked(skeleton.data.joints.size());
@@ -109,7 +109,7 @@ std::vector<FileFormat::Animation::LocalTransform> WoWClipCooker::Sample(const s
     return result;
 }
 
-WoWClipCooker::Result WoWClipCooker::Cook(const std::shared_ptr<Bytebuffer>& bytes, const M2::Layout& model, const WoWSkeletonCooker::Result& skeleton, u32 sequence, u64 skeletonAssetID, u16 rate, std::ostream& report)
+M2ClipCooker::Result M2ClipCooker::Cook(const std::shared_ptr<Bytebuffer>& bytes, const M2::Layout& model, const M2SkeletonCooker::Result& skeleton, u32 sequence, u64 skeletonAssetID, u16 rate, std::ostream& report, bool preservePeriod)
 {
     if (rate == 0)
     {
@@ -139,6 +139,9 @@ WoWClipCooker::Result WoWClipCooker::Cook(const std::shared_ptr<Bytebuffer>& byt
         };
         for (const u16 candidateRate : {30, 60, 120, 240, 480, 1000})
         {
+            // Independent loops must keep their exact period. Rounding a period
+            // changes phase on every repetition, even when one cycle looks right.
+            if (preservePeriod && (static_cast<u64>(At(bytes, model.md21.sequences, sequence).duration) * candidateRate) % 1000 != 0) continue;
             Result candidate = Cook(bytes, model, skeleton, sequence, skeletonAssetID, candidateRate, report);
             f32 maximumError = 0;
             vec3 lower(std::numeric_limits<f32>::max()), upper(std::numeric_limits<f32>::lowest());
@@ -305,6 +308,12 @@ WoWClipCooker::Result WoWClipCooker::Cook(const std::shared_ptr<Bytebuffer>& byt
             const u32 sourceTime = At(bytes, times, key);
             if (sourceTime > source.duration) throw std::runtime_error("Source footstep exceeds sequence duration");
             const u32 time = static_cast<u32>(std::llround(sourceTime * static_cast<double>(result.asset.durationMicroseconds) / source.duration));
+            const u64 marker = hash(left ? "animation-sync-marker/leftfoot" : "animation-sync-marker/rightfoot");
+            if (std::any_of(result.data.synchronizationMarkers.begin(), result.data.synchronizationMarkers.end(), [=](const auto& value) { return value.semanticID == marker && value.timeMicroseconds == time; }))
+            {
+                report << "merged-contact-event\t" << sequence << '\t' << code << '\t' << sourceTime << "\tone neutral contact per foot/time\n";
+                continue;
+            }
             A::AnimationEvent output;
             output.timeMicroseconds = time;
             output.eventTypeID = static_cast<u32>(hash("animation-event/footstep"));
@@ -314,7 +323,7 @@ WoWClipCooker::Result WoWClipCooker::Cook(const std::shared_ptr<Bytebuffer>& byt
             const auto* bytes = reinterpret_cast<const u8*>(&semantic);
             result.data.eventPayloadBytes.insert(result.data.eventPayloadBytes.end(), bytes, bytes + sizeof(semantic));
             result.data.events.push_back(output);
-            result.data.synchronizationMarkers.push_back({hash(left ? "animation-sync-marker/leftfoot" : "animation-sync-marker/rightfoot"), time, 0});
+            result.data.synchronizationMarkers.push_back({marker, time, 0});
         }
     }
     std::stable_sort(result.data.events.begin(), result.data.events.end(), [](const auto& first, const auto& second) { return first.timeMicroseconds < second.timeMicroseconds; });

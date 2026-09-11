@@ -36,7 +36,7 @@ if ($programManifest.programCount -ne $programManifest.programs.Count) { throw "
 
 $programsByKey = @{}
 foreach ($program in $programManifest.programs) {
-    if ($program.canonicalKey -notmatch '^wow/([0-9a-f]{16})$') { throw "Invalid canonicalKey: $($program.canonicalKey)" }
+    if ($program.canonicalKey -notmatch '^m2/([0-9a-f]{16})$') { throw "Invalid canonicalKey: $($program.canonicalKey)" }
     $keyHex = $Matches[1]
     if ($programsByKey.ContainsKey($keyHex)) { throw "Duplicate canonical program key: $keyHex" }
     if (!$program.canonicalDefinition) { throw "Program $keyHex has no canonical definition" }
@@ -100,7 +100,7 @@ Get-ChildItem -LiteralPath (Join-Path $PactRoot "manifests") -Filter "pack_*.man
                 $defaultDataSize = Read-UInt32 $bytes 52
                 $keyHex = $programKey.ToString("x16")
                 $foldedID = [UInt32](($programKey -band [UInt64]0xffffffffL) -bxor ($programKey -shr 32))
-                if ($path -ne "material/generated/wow/program_$keyHex.material") { throw "Material path/key mismatch: $path" }
+                if ($path -ne "material/generated/m2/program_$keyHex.material") { throw "Material path/key mismatch: $path" }
                 if ($programID -ne $foldedID) { throw "Diagnostic programID mismatch: $path" }
                 if (!$programsByKey.ContainsKey($keyHex)) { throw "Material is absent from aggregate manifest: $path" }
                 if ([UInt32]$programsByKey[$keyHex].programID -ne $programID) { throw "Manifest programID mismatch: $path" }

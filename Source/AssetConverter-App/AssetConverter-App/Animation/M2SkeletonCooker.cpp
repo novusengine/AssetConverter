@@ -1,4 +1,4 @@
-#include "WoWSkeletonCooker.h"
+#include "M2SkeletonCooker.h"
 #include <FileFormat/Shared.h>
 #include <xxhash/xxhash64.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -24,7 +24,7 @@ namespace
     };
 }
 
-WoWSkeletonCooker::Result WoWSkeletonCooker::Cook(const std::shared_ptr<Bytebuffer>& bytes, const M2::Layout& model, const std::vector<FileFormat::Animation::RigFamilyJoint>& family, std::ostream& report)
+M2SkeletonCooker::Result M2SkeletonCooker::Cook(const std::shared_ptr<Bytebuffer>& bytes, const M2::Layout& model, const std::vector<FileFormat::Animation::RigFamilyJoint>& family, std::ostream& report)
 {
     Result result;
     result.asset.rigFamilyAssetID = Hash("animation/bipedal_humanoid.rigfamily");
@@ -209,7 +209,9 @@ WoWSkeletonCooker::Result WoWSkeletonCooker::Cook(const std::shared_ptr<Bytebuff
         const bool selected = source.id < model.md21.attachmentLooukpList.size && *model.md21.attachmentLooukpList.GetElement(bytes, source.id) == i;
         // The lookup selects the public socket when raw records reuse an ID.
         // Preserve non-selected records under distinct auxiliary semantics.
-        const std::string semantic = selected ? "attachment/" + std::to_string(source.id) : "attachment/auxiliary/" + std::to_string(i);
+        static const std::vector<std::string> socketNames = {"shield", "right_hand", "left_hand", "right_elbow", "left_elbow", "right_shoulder", "left_shoulder", "right_knee", "left_knee", "right_hip", "left_hip", "helmet", "back", "right_shoulder_flap", "left_shoulder_flap", "chest_front", "chest_back", "breath", "nameplate", "base", "head", "left_hand_spell", "right_hand_spell", "special_1", "special_2", "special_3", "main_hand_sheath", "off_hand_sheath", "shield_sheath", "mounted_nameplate", "left_large_weapon", "right_large_weapon", "left_hip_weapon", "right_hip_weapon", "chest", "arrow", "bullet", "hand_omni", "hand_directed"};
+        if (selected && source.id >= socketNames.size()) throw std::runtime_error("Unmapped public source attachment ID " + std::to_string(source.id));
+        const std::string semantic = selected ? "skeleton-attachment/" + socketNames[source.id] : "source-attachment/m2/auxiliary/" + std::to_string(i);
         attachment.semanticID = Hash(semantic);
         report << "attachment\t" << i << '\t' << source.id << '\t' << semantic << '\n';
         attachment.jointIndex = result.sourceToCooked[source.bone];

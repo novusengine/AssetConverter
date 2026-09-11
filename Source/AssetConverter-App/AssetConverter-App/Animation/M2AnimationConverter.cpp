@@ -1,6 +1,6 @@
-#include "WoWAnimationConverter.h"
-#include "WoWSkeletonCooker.h"
-#include "WoWClipCooker.h"
+#include "M2AnimationConverter.h"
+#include "M2SkeletonCooker.h"
+#include "M2ClipCooker.h"
 #include "AssetConverter-App/Model/ModelV2Builder.h"
 #include <Jolt/Jolt.h>
 #include <Jolt/Core/Factory.h>
@@ -10,6 +10,7 @@
 #include "AssetConverter-App/Util/ServiceLocator.h"
 #include <Base/Util/DebugHandler.h>
 #include <FileFormat/Warcraft/M2/M2.h>
+#include <FileFormat/Shared.h>
 #include <FileFormat/Warcraft/Parsers/M2Parser.h>
 #include <xxhash/xxhash64.h>
 #include <filesystem>
@@ -18,6 +19,7 @@
 #include <iostream>
 #include <map>
 #include <stdexcept>
+#include <type_traits>
 
 namespace
 {
@@ -32,9 +34,99 @@ namespace
         inventory << "file\t" << id << '\t' << path.filename().string() << '\t' << bytes->writtenData << '\t' << std::hex << XXHash64::hash(bytes->GetDataPointer(), bytes->writtenData, 0) << std::dec << '\n';
     }
     template <typename T> u32 Bits(const T& flags) { u32 bits = 0; std::memcpy(&bits, &flags, sizeof(flags)); return bits; }
+
+    template <typename T> void CheckArray(const std::shared_ptr<Bytebuffer>& bytes, const T& array, const std::string& feature)
+    {
+        using Value = std::remove_cvref_t<decltype(*array.GetElement(bytes, 0))>;
+        if (array.offset > bytes->writtenData || array.size > (bytes->writtenData - array.offset) / sizeof(Value)) throw std::runtime_error("Invalid " + feature + " array");
+    }
+
+    template <typename T, typename Predicate> void AuditTrack(const std::shared_ptr<Bytebuffer>& bytes, const M2::Layout& model, const M2::M2Track<T>& track, const std::string& feature, Predicate supportedValue, std::ostream& report)
+    {
+        auto checkArray = [&](const auto& array)
+        {
+            CheckArray(bytes, array, feature);
+        };
+        checkArray(track.timestamps);
+        checkArray(track.values);
+        if (track.globalSequence < -1 || (track.globalSequence >= 0 && static_cast<u32>(track.globalSequence) >= model.md21.globalLoops.size)) throw std::runtime_error("Invalid " + feature + " global clock");
+        if (track.timestamps.size != track.values.size) throw std::runtime_error("Invalid " + feature + " channel count");
+        for (u32 slot = 0; slot < track.values.size; ++slot)
+        {
+            const auto& times = *track.timestamps.GetElement(bytes, slot);
+            const auto& values = *track.values.GetElement(bytes, slot);
+            checkArray(times);
+            checkArray(values);
+            if (times.size != values.size) throw std::runtime_error("Invalid " + feature + " key count");
+            bool supported = track.interpolationType <= 1;
+            for (u32 key = 0; key < values.size; ++key) supported &= supportedValue(*values.GetElement(bytes, key));
+            const bool global = track.globalSequence >= 0;
+            bool selected = global;
+            if (!global && slot < model.md21.sequences.size)
+            {
+                const auto& sequence = *model.md21.sequences.GetElement(bytes, slot);
+                selected = sequence.id == 0 || sequence.id == 4 || sequence.id == 5 || sequence.id == 69;
+                // Alias payloads may be used by a selected sequence with another ID.
+                for (u32 index = 0; !selected && index < model.md21.sequences.size; ++index)
+                {
+                    const auto& candidate = *model.md21.sequences.GetElement(bytes, index);
+                    if (candidate.id != 0 && candidate.id != 4 && candidate.id != 5 && candidate.id != 69) continue;
+                    u32 resolved = index;
+                    for (u32 hops = 0; model.md21.sequences.GetElement(bytes, resolved)->flags.IsAlias; ++hops)
+                    {
+                        if (hops >= model.md21.sequences.size) throw std::runtime_error("Animation alias cycle during feature audit");
+                        resolved = model.md21.sequences.GetElement(bytes, resolved)->nextAliasID;
+                        if (resolved >= model.md21.sequences.size) throw std::runtime_error("Animation alias out of range during feature audit");
+                    }
+                    selected = resolved == slot;
+                }
+            }
+            if (!values.size) continue;
+            report << "feature-track\t" << feature << '\t' << slot << '\t' << values.size << '\t' << (supported ? "supported constant/default" : selected ? "unsupported selected track: export rejected" : "unsupported track in unexported sequence") << '\n';
+            if (!supported && selected) throw std::runtime_error("Unsupported " + feature + " on selected animation; requires dedicated non-skeletal conversion");
+        }
+    }
+
+    void AuditNonSkeletalFeatures(const std::shared_ptr<Bytebuffer>& bytes, const M2::Layout& model, std::ostream& report)
+    {
+        for (u32 index = 0; index < model.md21.colors.size; ++index)
+        {
+            const auto& color = *model.md21.colors.GetElement(bytes, index);
+            AuditTrack(bytes, model, color.color, "material-rgb/" + std::to_string(index), [](vec3 value) { return value == vec3(1); }, report);
+            AuditTrack(bytes, model, color.alpha, "material-alpha/" + std::to_string(index), [](i16 value) { return value == 32767; }, report);
+        }
+        for (u32 index = 0; index < model.md21.textureWeights.size; ++index)
+        {
+            const auto& track = model.md21.textureWeights.GetElement(bytes, index)->weight;
+            CheckArray(bytes, track.values, "material-opacity");
+            bool allZero = true;
+            for (u32 slot = 0; slot < track.values.size; ++slot)
+            {
+                const auto& values = *track.values.GetElement(bytes, slot);
+                CheckArray(bytes, values, "material-opacity");
+                for (u32 key = 0; key < values.size; ++key) allZero &= *values.GetElement(bytes, key) == 0;
+            }
+            // The geometry cooker suppresses batches whose weight is always zero.
+            AuditTrack(bytes, model, track, "material-opacity/" + std::to_string(index), [allZero](i16 value) { return value == (allZero ? 0 : 32767); }, report);
+        }
+        for (u32 index = 0; index < model.md21.textureTransforms.size; ++index)
+        {
+            const auto& transform = *model.md21.textureTransforms.GetElement(bytes, index);
+            AuditTrack(bytes, model, transform.translation, "material-translation/" + std::to_string(index), [](vec3 value) { return value == vec3(0); }, report);
+            AuditTrack(bytes, model, transform.rotation, "material-rotation/" + std::to_string(index), [](quat value) { return value.x == 0 && value.y == 0 && value.z == 0 && std::abs(value.w) == 1; }, report);
+            AuditTrack(bytes, model, transform.scale, "material-scale/" + std::to_string(index), [](vec3 value) { return value == vec3(1); }, report);
+        }
+        for (u32 index = 0; index < model.md21.attachments.size; ++index)
+            AuditTrack(bytes, model, model.md21.attachments.GetElement(bytes, index)->isAnimated, "attachment-enable/" + std::to_string(index), [](u8 value) { return value == 1; }, report);
+        report << "feature\tcameras\t" << model.md21.cameras.size << "\tportrait cameras excluded; gameplay/editor owns camera\n";
+        report << "feature\tlights\t" << model.md21.lights.size << "\tunsupported model light emission\n";
+        report << "feature\tparticles\t" << model.md21.particleEmitters.size << "\tunsupported particle emission\n";
+        report << "feature\tribbons\t" << model.md21.ribbonEmitters.size << "\tunsupported ribbon emission\n";
+        if (model.md21.lights.size || model.md21.particleEmitters.size || model.md21.ribbonEmitters.size) throw std::runtime_error("Model contains unsupported light/particle/ribbon emission");
+    }
 }
 
-i32 WoWAnimationConverter::ExportCharacterAnimations(Runtime* runtime, const char* outputDirectory, const char* characterName)
+i32 M2AnimationConverter::ExportCharacterAnimations(Runtime* runtime, const char* outputDirectory, const char* characterName)
 {
     try
     {
@@ -75,15 +167,17 @@ i32 WoWAnimationConverter::ExportCharacterAnimations(Runtime* runtime, const cha
             M2::Parser parser;
             M2::Layout model;
             if (!parser.TryParse(M2::Parser::ParseType::Root, root, model)) throw std::runtime_error("M2 parse failed: " + source);
+            std::ofstream features(output / (name + "-features.tsv"));
+            AuditNonSkeletalFeatures(root, model, features);
+            if (!features) throw std::runtime_error("Feature report write failed");
             inventory << "model\t" << name << "\tversion\t" << model.md21.version << "\tbones\t" << model.md21.bones.size << "\tsequences\t" << model.md21.sequences.size << "\tglobalLoops\t" << model.md21.globalLoops.size << "\tattachments\t" << model.md21.attachments.size << "\tevents\t" << model.md21.events.size << "\ttextureTransforms\t" << model.md21.textureTransforms.size << "\tparticles\t" << model.md21.particleEmitters.size << "\tribbons\t" << model.md21.ribbonEmitters.size << '\n';
             if (model.sfid.skinFileIDs.empty()) throw std::runtime_error("M2 has no skin");
             auto skin = casc->GetFileByID(model.sfid.skinFileIDs[0]);
             SaveSource(output / "sources" / (name + ".skin"), skin, inventory, model.sfid.skinFileIDs[0]);
             if (!parser.TryParse(M2::Parser::ParseType::Skin, skin, model)) throw std::runtime_error("Skin parse failed");
             std::ofstream mapping(output / (name + "-mapping.tsv"));
-            // Tauren lower limbs retain their digitigrade bind posture when retargeted.
-            auto skeleton = WoWSkeletonCooker::Cook(root, model, family, mapping);
-            const std::string skeletonPath = "animations/wow/" + name + "/" + name + ".skeleton";
+            auto skeleton = M2SkeletonCooker::Cook(root, model, family, mapping);
+            const std::string skeletonPath = "animations/m2/" + name + "/" + name + ".skeleton";
             auto skeletonBuffer = std::make_shared<Bytebuffer>(nullptr, skeleton.asset.GetSerializedSize(skeleton.data));
             if (!skeleton.asset.Save(skeletonBuffer, skeleton.data) || !runtime->pactInfo.GetManifestForFile(runtime, skeletonBuffer->writtenData).AddFile(runtime, skeletonPath, skeletonBuffer)) throw std::runtime_error("Skeleton publication failed");
             const u64 skeletonID = XXHash64::hash(skeletonPath.data(), skeletonPath.size(), 0);
@@ -98,10 +192,10 @@ i32 WoWAnimationConverter::ExportCharacterAnimations(Runtime* runtime, const cha
                 std::transform(textureName.begin(), textureName.end(), textureName.begin(), ::tolower);
                 textures[textureIndex] = XXHash64::hash(textureName.data(), textureName.size(), 0);
             }
-            if (!ModelV2Builder::ConvertM2AndAdd(runtime, root, skin, model, textures, "animations/wow/" + name + "/" + name + ".model", skeletonID, skeleton.sourceToCooked)) throw std::runtime_error("Model conversion failed");
+            if (!ModelV2Builder::ConvertM2AndAdd(runtime, root, skin, model, textures, "animations/m2/" + name + "/" + name + ".model", skeletonID, skeleton.sourceToCooked)) throw std::runtime_error("Model conversion failed");
             const std::string previewMaterial = "material/generated/nbs/blender.materialinstance";
             runtime->previewMaterialAssetID = XXHash64::hash(previewMaterial.data(), previewMaterial.size(), 0);
-            if (!ModelV2Builder::ConvertM2AndAdd(runtime, root, skin, model, textures, "animations/wow/" + name + "/" + name + ".preview.model", skeletonID, skeleton.sourceToCooked)) throw std::runtime_error("Preview Model conversion failed");
+            if (!ModelV2Builder::ConvertM2AndAdd(runtime, root, skin, model, textures, "animations/m2/" + name + "/" + name + ".preview.model", skeletonID, skeleton.sourceToCooked)) throw std::runtime_error("Preview Model conversion failed");
             runtime->previewMaterialAssetID = FileFormat::INVALID_ASSET_ID;
             for (u32 index = 0; index < model.md21.bones.size; ++index)
             {
@@ -113,6 +207,23 @@ i32 WoWAnimationConverter::ExportCharacterAnimations(Runtime* runtime, const cha
             FileFormat::Animation::AnimationBoundsData boundsData;
             boundsData.clips.push_back({});
             vec3 boundsMinimum(std::numeric_limits<f32>::max()), boundsMaximum(std::numeric_limits<f32>::lowest());
+            std::vector<f32> translationRadius(skeleton.data.joints.size()), scaleRadius(skeleton.data.joints.size(), 1), additiveTranslation(skeleton.data.joints.size()), additiveScale(skeleton.data.joints.size(), 1);
+            for (u32 joint = 0; joint < skeleton.data.joints.size(); ++joint) translationRadius[joint] = glm::length(skeleton.data.joints[joint].restTransform.translation);
+            auto includeEnvelope = [&](const M2ClipCooker::Result& clip, const std::vector<u8>* mask)
+            {
+                for (const auto& track : clip.data.tracks)
+                {
+                    const u32 joint = track.sourceJointIndex;
+                    if (mask && !(*mask)[joint]) continue;
+                    f32 translation = glm::length(track.defaultTranslation);
+                    auto maximumScale = [](vec3 value) { value = glm::abs(value); return std::max({value.x, value.y, value.z}); };
+                    f32 scale = maximumScale(track.defaultScale);
+                    for (u32 i = 0; i < track.numTranslations; ++i) translation = std::max(translation, glm::length(clip.data.translationSamples[track.translationOffset + i]));
+                    for (u32 i = 0; i < track.numScales; ++i) scale = std::max(scale, maximumScale(clip.data.scaleSamples[track.scaleOffset + i]));
+                    if (mask) { additiveTranslation[joint] += translation; additiveScale[joint] *= std::max(1.0f, scale); }
+                    else { translationRadius[joint] = std::max(translationRadius[joint], translation); scaleRadius[joint] = std::max(scaleRadius[joint], scale); }
+                }
+            };
             std::vector<i32> independentClocks;
             for (u32 boneIndex = 0; boneIndex < model.md21.bones.size; ++boneIndex)
             {
@@ -151,7 +262,10 @@ i32 WoWAnimationConverter::ExportCharacterAnimations(Runtime* runtime, const cha
                 sequence.duration = *model.md21.globalLoops.GetElement(root, clock);
                 sequence.flags.IsAlias = false;
                 sequence.flags.HasEmbeddedAnimationData = true;
-                auto ambient = WoWClipCooker::Cook(isolated, model, skeleton, 0, skeletonID, 0, inventory);
+                auto isolatedModel = model;
+                // Independent skeletal clocks do not own the body's gameplay events.
+                isolatedModel.md21.events = {};
+                auto ambient = M2ClipCooker::Cook(isolated, isolatedModel, skeleton, 0, skeletonID, 0, inventory, true);
                 ambient.asset.flags |= FileFormat::Animation::AnimationClipFlags_Additive;
                 for (auto& track : ambient.data.tracks)
                 {
@@ -163,10 +277,11 @@ i32 WoWAnimationConverter::ExportCharacterAnimations(Runtime* runtime, const cha
                     for (u32 i = 0; i < track.numRotations; ++i) ambient.data.rotationSamples[track.rotationOffset + i] = glm::normalize(glm::inverse(rest.rotation) * ambient.data.rotationSamples[track.rotationOffset + i]);
                     for (u32 i = 0; i < track.numScales; ++i) ambient.data.scaleSamples[track.scaleOffset + i] /= rest.scale;
                 }
-                const std::string ambientPath = "animations/wow/" + name + "/ambient-face" + clockSuffix + ".animationclip";
+                const std::string ambientPath = "animations/m2/" + name + "/ambient-face" + clockSuffix + ".animationclip";
+                includeEnvelope(ambient, &maskData.jointWeights);
                 auto ambientBuffer = std::make_shared<Bytebuffer>(nullptr, ambient.asset.GetSerializedSize(ambient.data));
                 if (!ambient.asset.Save(ambientBuffer, ambient.data) || !runtime->pactInfo.GetManifestForFile(runtime, ambientBuffer->writtenData).AddFile(runtime, ambientPath, ambientBuffer)) throw std::runtime_error("Independent motion publication failed");
-                const std::string maskPath = "animations/wow/" + name + "/ambient-face" + clockSuffix + ".bonemask";
+                const std::string maskPath = "animations/m2/" + name + "/ambient-face" + clockSuffix + ".bonemask";
                 auto maskBuffer = std::make_shared<Bytebuffer>(nullptr, mask.GetSerializedSize(maskData));
                 if (!mask.Save(maskBuffer, maskData) || !runtime->pactInfo.GetManifestForFile(runtime, maskBuffer->writtenData).AddFile(runtime, maskPath, maskBuffer)) throw std::runtime_error("Independent motion mask publication failed");
                 FileFormat::Animation::AnimationClipVariant variant;
@@ -195,9 +310,10 @@ i32 WoWAnimationConverter::ExportCharacterAnimations(Runtime* runtime, const cha
                 if (sequence.id == 0 || sequence.id == 4 || sequence.id == 5 || sequence.id == 69)
                 {
                     const std::string slot = sequence.id == 0 ? "idle" : sequence.id == 4 ? "walk" : sequence.id == 5 ? "run" : "dance";
-                    auto clip = WoWClipCooker::Cook(root, model, skeleton, index, skeletonID, 0, inventory);
+                    auto clip = M2ClipCooker::Cook(root, model, skeleton, index, skeletonID, 0, inventory);
+                    includeEnvelope(clip, nullptr);
                     auto clipBuffer = std::make_shared<Bytebuffer>(nullptr, clip.asset.GetSerializedSize(clip.data));
-                    const std::string clipPath = "animations/wow/" + name + "/" + slot + "-" + std::to_string(sequence.variationID) + ".animationclip";
+                    const std::string clipPath = "animations/m2/" + name + "/" + slot + "-" + std::to_string(sequence.variationID) + ".animationclip";
                     if (!clip.asset.Save(clipBuffer, clip.data) || !runtime->pactInfo.GetManifestForFile(runtime, clipBuffer->writtenData).AddFile(runtime, clipPath, clipBuffer)) throw std::runtime_error("Clip publication failed: " + clipPath);
                     const std::string semantic = sequence.id == 4 ? "walkforward" : sequence.id == 5 ? "runforward" : slot;
                     FileFormat::Animation::AnimationClipVariant variant;
@@ -217,13 +333,41 @@ i32 WoWAnimationConverter::ExportCharacterAnimations(Runtime* runtime, const cha
                 }
             }
             auto& globalBounds = boundsData.clips.front().fallbackBounds;
+            // A clip's tight bounds do not cover arbitrary independent-layer
+            // phases. Bound composed TRS using triangle inequalities instead.
+            std::vector<f32> modelRadius(skeleton.data.joints.size()), modelScale(skeleton.data.joints.size());
+            for (u32 joint = 0; joint < skeleton.data.joints.size(); ++joint)
+            {
+                const i32 parent = skeleton.data.joints[joint].parentJointIndex;
+                const f32 parentScale = parent < 0 ? 1.0f : modelScale[parent];
+                modelRadius[joint] = (parent < 0 ? 0.0f : modelRadius[parent]) + parentScale * (translationRadius[joint] + additiveTranslation[joint]);
+                modelScale[joint] = parentScale * scaleRadius[joint] * additiveScale[joint];
+            }
+            f32 composedRadius = 0;
+            for (u32 vertexIndex = 0; vertexIndex < model.md21.vertices.size; ++vertexIndex)
+            {
+                const auto& vertex = *model.md21.vertices.GetElement(root, vertexIndex);
+                const vec3 position = CoordinateSpaces::ModelPosToNovus(vertex.position);
+                f32 radius = 0;
+                for (u32 influence = 0; influence < 4; ++influence)
+                {
+                    if (!vertex.boneWeights[influence]) continue;
+                    const u32 joint = skeleton.sourceToCooked[vertex.boneIndices[influence]];
+                    radius += (modelRadius[joint] + modelScale[joint] * glm::length(position - skeleton.cookedPivots[joint])) * (vertex.boneWeights[influence] / 255.0f);
+                }
+                composedRadius = std::max(composedRadius, radius);
+            }
+            if (!std::isfinite(composedRadius)) throw std::runtime_error("Non-finite composed animation bounds");
+            boundsMinimum = glm::min(boundsMinimum, vec3(-composedRadius - 0.01f));
+            boundsMaximum = glm::max(boundsMaximum, vec3(composedRadius + 0.01f));
+            inventory << "composed-bounds\t" << name << '\t' << composedRadius << "\tall body/independent-layer phases\n";
             globalBounds.center = (boundsMinimum + boundsMaximum) * 0.5f;
             globalBounds.extents = (boundsMaximum - boundsMinimum) * 0.5f;
             globalBounds.sphereRadius = glm::length(globalBounds.extents);
             for (const std::string suffix : {"", ".preview"})
             {
-                const std::string modelPath = "animations/wow/" + name + "/" + name + suffix + ".model";
-                const std::string boundsPath = "animations/wow/" + name + "/" + name + suffix + ".animationbounds";
+                const std::string modelPath = "animations/m2/" + name + "/" + name + suffix + ".model";
+                const std::string boundsPath = "animations/m2/" + name + "/" + name + suffix + ".animationbounds";
                 FileFormat::Animation::AnimationBoundsAsset boundsAsset;
                 boundsAsset.modelAssetID = XXHash64::hash(modelPath.data(), modelPath.size(), 0);
                 boundsAsset.skeletonAssetID = skeletonID;
@@ -247,13 +391,13 @@ i32 WoWAnimationConverter::ExportCharacterAnimations(Runtime* runtime, const cha
                 setData.variants.insert(setData.variants.end(), variants.begin(), variants.end());
             }
             auto setBuffer = std::make_shared<Bytebuffer>(nullptr, animationSet.GetSerializedSize(setData));
-            const std::string setPath = "animations/wow/" + name + "/" + name + ".animationset";
+            const std::string setPath = "animations/m2/" + name + "/" + name + ".animationset";
             if (!animationSet.Save(setBuffer, setData) || !runtime->pactInfo.GetManifestForFile(runtime, setBuffer->writtenData).AddFile(runtime, setPath, setBuffer)) throw std::runtime_error("AnimationSet publication failed");
             const std::string familyAssetPath = "animation/bipedal_humanoid.rigfamily";
             animationSet.declaredPoseDomainType = FileFormat::Animation::PoseDomainType::RigFamily;
             animationSet.declaredPoseDomainAssetID = XXHash64::hash(familyAssetPath.data(), familyAssetPath.size(), 0);
             auto familySetBuffer = std::make_shared<Bytebuffer>(nullptr, animationSet.GetSerializedSize(setData));
-            const std::string familySetPath = "animations/wow/" + name + "/" + name + ".family.animationset";
+            const std::string familySetPath = "animations/m2/" + name + "/" + name + ".family.animationset";
             if (!animationSet.Save(familySetBuffer, setData) || !runtime->pactInfo.GetManifestForFile(runtime, familySetBuffer->writtenData).AddFile(runtime, familySetPath, familySetBuffer)) throw std::runtime_error("Family AnimationSet publication failed");
             FileFormat::Animation::AnimationSetData referenceData;
             FileFormat::Animation::AnimationSetSlot danceSlot;
@@ -263,7 +407,7 @@ i32 WoWAnimationConverter::ExportCharacterAnimations(Runtime* runtime, const cha
             danceSlot.flags = FileFormat::Animation::AnimationSetSlotFlags_Required;
             referenceData.slots.push_back(danceSlot);
             FileFormat::Animation::AnimationClipVariant danceVariant;
-            const std::string dancePath = "animations/wow/" + name + "/dance-0.animationclip";
+            const std::string dancePath = "animations/m2/" + name + "/dance-0.animationclip";
             danceVariant.animationClipAssetID = XXHash64::hash(dancePath.data(), dancePath.size(), 0);
             danceVariant.selectionWeight = 1;
             danceVariant.stableVariationID = static_cast<u32>(danceVariant.animationClipAssetID);
@@ -281,7 +425,7 @@ i32 WoWAnimationConverter::ExportCharacterAnimations(Runtime* runtime, const cha
                 referenceData.variants.push_back(variants.front());
             }
             auto referenceBuffer = std::make_shared<Bytebuffer>(nullptr, animationSet.GetSerializedSize(referenceData));
-            const std::string referencePath = "animations/wow/" + name + "/" + name + ".dance-reference.animationset";
+            const std::string referencePath = "animations/m2/" + name + "/" + name + ".dance-reference.animationset";
             if (!animationSet.Save(referenceBuffer, referenceData) || !runtime->pactInfo.GetManifestForFile(runtime, referenceBuffer->writtenData).AddFile(runtime, referencePath, referenceBuffer)) throw std::runtime_error("Reference AnimationSet publication failed");
             // Single-variation sets keep every actor on the same clip in synchronized comparisons.
             const auto& danceVariants = slots.at("dance");
@@ -289,7 +433,7 @@ i32 WoWAnimationConverter::ExportCharacterAnimations(Runtime* runtime, const cha
             {
                 referenceData.variants[0] = danceVariants[variation];
                 auto variationBuffer = std::make_shared<Bytebuffer>(nullptr, animationSet.GetSerializedSize(referenceData));
-                const std::string variationPath = "animations/wow/" + name + "/" + name + ".dance-variant-" + std::to_string(variation) + ".animationset";
+                const std::string variationPath = "animations/m2/" + name + "/" + name + ".dance-variant-" + std::to_string(variation) + ".animationset";
                 if (!animationSet.Save(variationBuffer, referenceData) || !runtime->pactInfo.GetManifestForFile(runtime, variationBuffer->writtenData).AddFile(runtime, variationPath, variationBuffer)) throw std::runtime_error("Dance variation publication failed");
                 inventory << "dance-comparison\t" << name << '\t' << variation << '\t' << variationPath << '\t' << danceVariants[variation].animationClipAssetID << '\n';
             }
@@ -300,18 +444,18 @@ i32 WoWAnimationConverter::ExportCharacterAnimations(Runtime* runtime, const cha
                 auto bytes = casc->GetFileByID(animation.fileID);
                 SaveSource(output / "sources" / (name + "-" + std::to_string(animation.animID) + "-" + std::to_string(animation.variationID) + ".anim"), bytes, inventory, animation.fileID);
             }
-            NC_LOG_INFO("[WoW Animation] Inventoried {}: {} bones, {} sequences", name, model.md21.bones.size, model.md21.sequences.size);
+            NC_LOG_INFO("[M2 Animation] Inventoried {}: {} bones, {} sequences", name, model.md21.bones.size, model.md21.sequences.size);
         }
         casc->Close();
         if (!ModelV2Builder::FlushPendingMaterials(runtime)) throw std::runtime_error("Material publication failed");
         if (!inventory) throw std::runtime_error("Inventory write failed");
-        NC_LOG_INFO("[WoW Animation] Corpus inventory complete");
+        NC_LOG_INFO("[M2 Animation] Character animation export complete");
         return 0;
     }
     catch (const std::exception& error)
     {
-        NC_LOG_ERROR("[WoW Animation] {}", error.what());
-        std::cerr << "[WoW Animation] " << error.what() << std::endl;
+        NC_LOG_ERROR("[M2 Animation] {}", error.what());
+        std::cerr << "[M2 Animation] " << error.what() << std::endl;
         return 1;
     }
 }
